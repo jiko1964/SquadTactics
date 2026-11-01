@@ -12,6 +12,8 @@ public class CharacterData : ScriptableObject
     public int mobility = 25;  // 機動力
     public int search = 50;    // 索敵
     public WeaponData defaultWeapon; // 標準の武器
+    public EquipmentData[] equipment; // 標準編制（武器以外の持ち込み）
+
     public string ultName = "";
     [TextArea] public string ultDescription = "";
     public Color color = Color.white; // キャラの色

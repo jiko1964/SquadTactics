@@ -16,6 +16,7 @@ public class Unit : MonoBehaviour
     public int agility = 50;
     public int mobility = 25;
     public int search = 50;
+    public int armorBonus = 0; // 盾・鎧の防御ボーナス合計
 
     [Header("武器（データから自動入力）")]
     public WeaponData weapon;
@@ -48,6 +49,18 @@ public class Unit : MonoBehaviour
             mobility = data.mobility;
             search = data.search;
             weapon = data.defaultWeapon;
+
+            // 装備の反映：防御ボーナス合算と機動力ペナルティ
+            armorBonus = 0;
+            if (data.equipment != null)
+            {
+                foreach (var item in data.equipment)
+                {
+                    if (item == null) continue;
+                    armorBonus += item.defenseBonus;
+                    mobility -= item.mobilityPenalty;
+                }
+            }
         }
         if (weapon != null)
         {

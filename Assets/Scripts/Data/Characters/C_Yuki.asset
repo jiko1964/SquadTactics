@@ -21,6 +21,8 @@ MonoBehaviour:
   mobility: 25
   search: 60
   defaultWeapon: {fileID: 11400000, guid: b9aa47aa09b3f9a408828b8e6bea1513, type: 2}
+  equipment:
+  - {fileID: 11400000, guid: 754b700300d29934fb4da93d8fe1476a, type: 2}
   ultName: "\u5FC5\u4E2D\u72D9\u6483"
   ultDescription: "\u6B21\u306E\u5C04\u6483\u304C\u5FC5\u4E2D\u3001\u30C0\u30E1\u30FC\u30B8+50%"
   color: {r: 0, g: 0.8078432, b: 0.8196079, a: 1}
