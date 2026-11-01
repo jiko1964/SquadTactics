@@ -19,9 +19,11 @@ public class GameController : MonoBehaviour
     public int turnNumber = 1;
     private bool gameOver = false;
     private bool attackPhase = false; // false=移動フェーズ、true=攻撃フェーズ
+    private TerrainGrid terrain;
 
     void Start()
     {
+        terrain = FindAnyObjectByType<TerrainGrid>();
         UpdateTurnText();
     }
 
@@ -177,7 +179,7 @@ public class GameController : MonoBehaviour
             if (target.hp <= 0)
             {
                 Debug.Log($"{target.displayName} を撃破！");
-                target.gameObject.SetActive(false); // 即座に非表示＆集計対象外
+                target.gameObject.SetActive(false);
             }
         }
         attacker.hasAttacked = true;
@@ -221,6 +223,7 @@ public class GameController : MonoBehaviour
                     if (dx == 0 && dy == 0) continue;
                     Vector2Int c = unit.cell + new Vector2Int(dx, dy);
                     if (!Inside(c)) continue;
+                    if (terrain != null && !terrain.IsPassable(c)) continue;
 
                     bool occupied = false;
                     foreach (Unit u in all)

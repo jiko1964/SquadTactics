@@ -586,6 +586,7 @@ GameObject:
   - component: {fileID: 992304816}
   - component: {fileID: 992304817}
   - component: {fileID: 992304818}
+  - component: {fileID: 992304819}
   m_Layer: 0
   m_Name: GameManager
   m_TagString: Untagged
@@ -645,6 +646,19 @@ MonoBehaviour:
   - {fileID: 11400000, guid: e26f90d4ec88dc64f8f6b7a7a9022080, type: 2}
   - {fileID: 11400000, guid: 9fbdaedc3298b204982e6a802278b453, type: 2}
   - {fileID: 11400000, guid: 4b6a479438906344e9f39f71efaca9a2, type: 2}
+--- !u!114 &992304819
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 992304814}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fed08f9f182dc3e46953ac1cbc8d6280, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TerrainGrid
+  terrainTilePrefab: {fileID: 3393027838173526482, guid: 3e8b014a5c0b62f4f980d1b9289d0fd0, type: 3}
 --- !u!1 &1140336919
 GameObject:
   m_ObjectHideFlags: 0
@@ -725,7 +739,7 @@ TilemapRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 0
+  m_SortingOrder: -1
   m_MaskInteraction: 0
   m_ChunkSize: {x: 32, y: 32, z: 32}
   m_ChunkCullingBounds: {x: 0, y: 0, z: 0}

@@ -6,10 +6,11 @@ public class UnitSpawner : MonoBehaviour
     public CharacterData[] team1Characters;
     public CharacterData[] team2Characters;
 
+    // 初期配置（マップの配置エリア内・180度回転対称）
     private readonly Vector2Int[] team1Cells =
-        { new(2, 1), new(2, 2), new(2, 3) };
+        { new(7, 1), new(8, 1), new(9, 1) };
     private readonly Vector2Int[] team2Cells =
-        { new(15, 14), new(15, 15), new(15, 16) };
+        { new(8, 16), new(9, 16), new(10, 16) };
 
     void Start()
     {
