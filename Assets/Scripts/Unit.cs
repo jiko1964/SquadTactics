@@ -19,8 +19,8 @@ public class Unit : MonoBehaviour
     public int armorBonus = 0; // 盾・鎧の防御ボーナス合計
 
     [Header("シールド（データから自動入力）")]
-    public int shieldBonus = 0;      // シールド系だけの防御補正（ハンマーはこれを無視）
-    public int shieldBlockRate = 0;  // 0ならブロック不可
+    public int shieldBonus = 0; // シールド系だけの防御補正（ハンマーはこれを無視）
+    public int shieldBlockRate = 0; // 0ならブロック不可
     public bool hasCounterShield = false;
 
     [Header("武器（データから自動入力）")]
@@ -29,6 +29,13 @@ public class Unit : MonoBehaviour
     public int weaponPower = 10;
     public int weaponAccuracy = 80;
 
+    [Header("状態異常")]
+    public bool poisoned = false;
+    public bool beaconed = false;
+    public int stunTurns = 0; // 0より大きい間は行動不能
+
+    [HideInInspector]
+    public int poisonSourceTeam = 0; // 毒を付与したチーム（毒で倒したときの得点用）
     [HideInInspector]
     public bool movedThisTurn = false;
     [HideInInspector]

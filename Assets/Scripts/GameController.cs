@@ -359,6 +359,17 @@ public class GameController : MonoBehaviour
                 resolveIndex++;
                 continue; // 倒れたユニットの指示は無効
             }
+
+            // 行動不能：移動も行動もできない
+            if (u.stunTurns > 0)
+            {
+                u.stunTurns--;
+                u.movedThisTurn = false;
+                Debug.Log($"{u.displayName} は行動不能で動けない（残り {u.stunTurns} ターン）");
+                resolveIndex++;
+                continue;
+            }
+
             orders.TryGetValue(u, out var o);
 
             // ① 移動を実行
@@ -454,6 +465,10 @@ public class GameController : MonoBehaviour
 
     void FinishRound()
     {
+        // ターン終了処理：毒ダメージ
+        ApplyPoisonDamage();
+        if (gameOver) { RefreshReadyUI(); return; }
+
         orders.Clear();
         teamReady[1] = false;
         teamReady[2] = false;
@@ -480,6 +495,28 @@ public class GameController : MonoBehaviour
         Debug.Log($"―― ターン{turnNumber}：指示入力（両チーム同時） ――");
         UpdateTurnText();
         RefreshReadyUI();
+    }
+
+    // ターン終了処理：毒状態のユニットに固定5ダメージ
+    void ApplyPoisonDamage()
+    {
+        foreach (Unit u in FindObjectsByType<Unit>())
+        {
+            if (!u.poisoned) continue;
+            u.hp -= 5;
+            Debug.Log($"{u.displayName} は毒で5ダメージ（残りHP {Mathf.Max(u.hp, 0)}）");
+            if (u.hp <= 0)
+            {
+                Debug.Log($"{u.displayName} は毒で倒れた！");
+                u.gameObject.SetActive(false);
+                if (u.poisonSourceTeam >= 1 && u.poisonSourceTeam <= 2)
+                {
+                    score[u.poisonSourceTeam] += 2;
+                    Debug.Log($"チーム{u.poisonSourceTeam} +2点（スコア {score[1]} - {score[2]}）");
+                }
+            }
+        }
+        CheckWin();
     }
 
     bool AnyEnemyInRange(Unit unit, Vector2Int origin)
@@ -586,6 +623,17 @@ public class GameController : MonoBehaviour
         return null;
     }
 
+    // 指定した名前の装備を持っているか
+    bool HasItem(Unit unit, string itemName)
+    {
+        if (unit.data == null || unit.data.equipment == null) return false;
+        foreach (var item in unit.data.equipment)
+        {
+            if (item != null && item.itemName == itemName) return true;
+        }
+        return false;
+    }
+
     void Attack(Unit attacker, Unit target)
     {
         // ハンマーはシールドの防御補正とブロックを無視する
@@ -654,6 +702,23 @@ public class GameController : MonoBehaviour
 
             target.hp -= damage;
             Debug.Log($"{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
+
+            // 状態異常の付与（ダメージが通って、対象が生き残った場合のみ）
+            if (target.hp > 0)
+            {
+                if (HasItem(attacker, "毒付与") && !target.poisoned)
+                {
+                    target.poisoned = true;
+                    target.poisonSourceTeam = attacker.team;
+                    Debug.Log($"{target.displayName} は毒状態になった！");
+                }
+                if (HasItem(attacker, "ビーコン弾") && !target.beaconed)
+                {
+                    target.beaconed = true;
+                    Debug.Log($"{target.displayName} にビーコンが付着した！（壁抜き等の効果は情報戦ステップで実装）");
+                }
+            }
+
             if (target.hp <= 0)
             {
                 Debug.Log($"{target.displayName} を撃破！");
