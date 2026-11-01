@@ -28,8 +28,10 @@ public class Unit : MonoBehaviour
     public bool movedThisTurn = false;
     [HideInInspector]
     public bool hasAttacked = false;
+    [HideInInspector]
+    public bool defending = false; // 防御準備をしたらtrue（効果は次ステップ）
 
-    public int MoveTiles => Mathf.Max(1, mobility / 5);
+    public int MoveTiles => Mathf.Max(1, mobility / 7);
 
     void Start()
     {
