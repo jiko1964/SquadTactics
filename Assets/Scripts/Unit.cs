@@ -18,6 +18,10 @@ public class Unit : MonoBehaviour
     [Header("武器")]
     public int weaponRange = 1;
     public int weaponPower = 10;
+    public int weaponAccuracy = 80; // 武器精度（％）
+
+    [HideInInspector]
+    public bool movedThisTurn = false; // 移動したらtrue（移動なしボーナス判定用）
 
     public int MoveTiles => Mathf.Max(1, mobility / 5);
 

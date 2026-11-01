@@ -161,6 +161,8 @@ MonoBehaviour:
   agility: 45
   weaponRange: 7
   weaponPower: 20
+  weaponAccuracy: 75
+  movedThisTurn: 0
 --- !u!212 &115791026
 SpriteRenderer:
   serializedVersion: 3
@@ -278,6 +280,8 @@ MonoBehaviour:
   agility: 50
   weaponRange: 4
   weaponPower: 15
+  weaponAccuracy: 85
+  movedThisTurn: 0
 --- !u!212 &139048940
 SpriteRenderer:
   serializedVersion: 3
@@ -395,6 +399,8 @@ MonoBehaviour:
   agility: 80
   weaponRange: 3
   weaponPower: 10
+  weaponAccuracy: 80
+  movedThisTurn: 0
 --- !u!212 &396830918
 SpriteRenderer:
   serializedVersion: 3
@@ -649,6 +655,8 @@ MonoBehaviour:
   agility: 60
   weaponRange: 2
   weaponPower: 15
+  weaponAccuracy: 80
+  movedThisTurn: 0
 --- !u!212 &735918953
 SpriteRenderer:
   serializedVersion: 3
@@ -811,6 +819,8 @@ MonoBehaviour:
   agility: 40
   weaponRange: 3
   weaponPower: 10
+  weaponAccuracy: 80
+  movedThisTurn: 0
 --- !u!212 &1056625482
 SpriteRenderer:
   serializedVersion: 3
@@ -4368,6 +4378,8 @@ MonoBehaviour:
   agility: 25
   weaponRange: 1
   weaponPower: 30
+  weaponAccuracy: 60
+  movedThisTurn: 0
 --- !u!212 &1861105593
 SpriteRenderer:
   serializedVersion: 3

@@ -40,6 +40,7 @@ public class GameController : MonoBehaviour
         {
             selected.cell = cell;
             selected.SnapToCell();
+            selected.movedThisTurn = true;
             Debug.Log($"{selected.displayName} が {cell} へ移動");
             Select(selected);
             return;
@@ -63,16 +64,37 @@ public class GameController : MonoBehaviour
 
     void Attack(Unit attacker, Unit target)
     {
-        // ステップ4の仮ダメージ（武器威力そのまま）。ステップ5で計算式に差し替え
-        int damage = attacker.weaponPower;
-        target.hp -= damage;
-        Debug.Log($"{attacker.displayName} の攻撃！ {target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
-        if (target.hp <= 0)
+        // 命中率 ＝ 武器精度 ＋（精密 − 敏捷性）÷2 ＋ 移動なしボーナス10
+        int hitRate = Mathf.Clamp(
+            Mathf.RoundToInt(attacker.weaponAccuracy
+                + (attacker.precision - target.agility) / 2f
+                + (attacker.movedThisTurn ? 0 : 10)),
+            5, 95);
+
+        int roll = Random.Range(1, 101); // 1〜100の出目
+        if (roll > hitRate)
         {
-            Debug.Log($"{target.displayName} を撃破！");
-            Destroy(target.gameObject);
+            Debug.Log($"{attacker.displayName} の攻撃！ 命中率 {hitRate}% → 出目 {roll} で 外れ");
         }
+        else
+        {
+            // ダメージ ＝（攻撃力＋武器威力）÷2 × 100÷（100＋防御力）
+            float raw = (attacker.attack + attacker.weaponPower) / 2f
+                        * 100f / (100 + target.defense);
+            if (!attacker.movedThisTurn) raw *= 1.1f; // 移動なしボーナス
+            int damage = Mathf.Max(1, Mathf.RoundToInt(raw));
+
+            target.hp -= damage;
+            Debug.Log($"{attacker.displayName} の攻撃！ 命中率 {hitRate}% → 出目 {roll} で 命中。{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
+            if (target.hp <= 0)
+            {
+                Debug.Log($"{target.displayName} を撃破！");
+                Destroy(target.gameObject);
+            }
+        }
+        attacker.movedThisTurn = false;
     }
+
 
     void Select(Unit u)
     {
