@@ -153,6 +153,14 @@ MonoBehaviour:
   team: 1
   cell: {x: 2, y: 3}
   mobility: 25
+  maxHp: 55
+  hp: 55
+  attack: 70
+  defense: 30
+  precision: 85
+  agility: 45
+  weaponRange: 7
+  weaponPower: 20
 --- !u!212 &115791026
 SpriteRenderer:
   serializedVersion: 3
@@ -262,6 +270,14 @@ MonoBehaviour:
   team: 2
   cell: {x: 15, y: 15}
   mobility: 45
+  maxHp: 75
+  hp: 75
+  attack: 40
+  defense: 55
+  precision: 60
+  agility: 50
+  weaponRange: 4
+  weaponPower: 15
 --- !u!212 &139048940
 SpriteRenderer:
   serializedVersion: 3
@@ -371,6 +387,14 @@ MonoBehaviour:
   team: 2
   cell: {x: 15, y: 14}
   mobility: 50
+  maxHp: 50
+  hp: 50
+  attack: 35
+  defense: 25
+  precision: 50
+  agility: 80
+  weaponRange: 3
+  weaponPower: 10
 --- !u!212 &396830918
 SpriteRenderer:
   serializedVersion: 3
@@ -617,6 +641,14 @@ MonoBehaviour:
   team: 1
   cell: {x: 2, y: 1}
   mobility: 40
+  maxHp: 70
+  hp: 70
+  attack: 85
+  defense: 40
+  precision: 70
+  agility: 60
+  weaponRange: 2
+  weaponPower: 15
 --- !u!212 &735918953
 SpriteRenderer:
   serializedVersion: 3
@@ -771,6 +803,14 @@ MonoBehaviour:
   team: 2
   cell: {x: 15, y: 16}
   mobility: 35
+  maxHp: 65
+  hp: 65
+  attack: 35
+  defense: 45
+  precision: 50
+  agility: 40
+  weaponRange: 3
+  weaponPower: 10
 --- !u!212 &1056625482
 SpriteRenderer:
   serializedVersion: 3
@@ -4320,6 +4360,14 @@ MonoBehaviour:
   team: 1
   cell: {x: 2, y: 2}
   mobility: 25
+  maxHp: 100
+  hp: 100
+  attack: 55
+  defense: 95
+  precision: 40
+  agility: 25
+  weaponRange: 1
+  weaponPower: 30
 --- !u!212 &1861105593
 SpriteRenderer:
   serializedVersion: 3
