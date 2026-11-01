@@ -22,6 +22,8 @@ public class Unit : MonoBehaviour
 
     [HideInInspector]
     public bool movedThisTurn = false; // 移動したらtrue（移動なしボーナス判定用）
+    [HideInInspector]
+    public bool hasAttacked = false; // 攻撃したらtrue
 
     public int MoveTiles => Mathf.Max(1, mobility / 5);
 
