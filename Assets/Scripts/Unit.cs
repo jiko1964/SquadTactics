@@ -15,20 +15,29 @@ public class Unit : MonoBehaviour
     public int precision = 50; // 精密
     public int agility = 50;   // 敏捷性
 
-    [Header("武器")]
+    [Header("武器データ")]
+    public WeaponData weapon;
+
+    [Header("武器（データから自動入力）")]
     public int weaponRange = 1;
     public int weaponPower = 10;
-    public int weaponAccuracy = 80; // 武器精度（％）
+    public int weaponAccuracy = 80;
 
     [HideInInspector]
-    public bool movedThisTurn = false; // 移動したらtrue（移動なしボーナス判定用）
+    public bool movedThisTurn = false;
     [HideInInspector]
-    public bool hasAttacked = false; // 攻撃したらtrue
+    public bool hasAttacked = false;
 
     public int MoveTiles => Mathf.Max(1, mobility / 5);
 
     void Start()
     {
+        if (weapon != null)
+        {
+            weaponPower = weapon.power;
+            weaponAccuracy = weapon.accuracy;
+            weaponRange = weapon.range;
+        }
         hp = maxHp;
         SnapToCell();
     }

@@ -159,6 +159,7 @@ MonoBehaviour:
   defense: 30
   precision: 85
   agility: 45
+  weapon: {fileID: 11400000, guid: b9aa47aa09b3f9a408828b8e6bea1513, type: 2}
   weaponRange: 7
   weaponPower: 20
   weaponAccuracy: 75
@@ -273,7 +274,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 1120, y: -570}
+  m_AnchoredPosition: {x: 160, y: -30}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &121284996
@@ -519,6 +520,7 @@ MonoBehaviour:
   defense: 55
   precision: 60
   agility: 50
+  weapon: {fileID: 11400000, guid: 3625c7d03c5cc3c4984a5f7a0373d0f0, type: 2}
   weaponRange: 4
   weaponPower: 15
   weaponAccuracy: 85
@@ -639,6 +641,7 @@ MonoBehaviour:
   defense: 25
   precision: 50
   agility: 80
+  weapon: {fileID: 11400000, guid: d3c56acbe94c87744bdffef4c301b3f2, type: 2}
   weaponRange: 3
   weaponPower: 10
   weaponAccuracy: 80
@@ -975,6 +978,7 @@ MonoBehaviour:
   defense: 40
   precision: 70
   agility: 60
+  weapon: {fileID: 11400000, guid: 1758c60363373ca4a8cfffd96c6a6c2c, type: 2}
   weaponRange: 2
   weaponPower: 15
   weaponAccuracy: 80
@@ -1143,6 +1147,7 @@ MonoBehaviour:
   defense: 45
   precision: 50
   agility: 40
+  weapon: {fileID: 11400000, guid: d3c56acbe94c87744bdffef4c301b3f2, type: 2}
   weaponRange: 3
   weaponPower: 10
   weaponAccuracy: 80
@@ -4703,6 +4708,7 @@ MonoBehaviour:
   defense: 95
   precision: 40
   agility: 25
+  weapon: {fileID: 11400000, guid: 9daa333476b89f94eb8d393607dac9dc, type: 2}
   weaponRange: 1
   weaponPower: 30
   weaponAccuracy: 60
