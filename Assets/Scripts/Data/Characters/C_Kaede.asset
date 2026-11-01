@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 330836accaf91014a9793ad1191fac32, type: 3}
+  m_Name: C_Kaede
+  m_EditorClassIdentifier: Assembly-CSharp::CharacterData
+  characterName: "\u30AB\u30A8\u30C7"
+  maxHp: 70
+  attack: 85
+  defense: 40
+  precision: 70
+  agility: 60
+  mobility: 40
+  search: 5
+  defaultWeapon: {fileID: 11400000, guid: 1758c60363373ca4a8cfffd96c6a6c2c, type: 2}
+  ultName: "\u75BE\u98A8\u65AC"
+  ultDescription: "\u79FB\u52D5+4\u3001\u8FD1\u63A5\u653B\u64832\u56DE"
+  color: {r: 0, g: 0.3921569, b: 0, a: 1}

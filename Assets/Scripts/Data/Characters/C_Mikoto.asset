@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 330836accaf91014a9793ad1191fac32, type: 3}
+  m_Name: C_Mikoto
+  m_EditorClassIdentifier: Assembly-CSharp::CharacterData
+  characterName: "\u30AD\u30E3\u30E9"
+  maxHp: 60
+  attack: 45
+  defense: 45
+  precision: 65
+  agility: 55
+  mobility: 35
+  search: 70
+  defaultWeapon: {fileID: 11400000, guid: d3c56acbe94c87744bdffef4c301b3f2, type: 2}
+  ultName: "\u30AA\u30FC\u30D0\u30FC\u30E9\u30A4\u30C9"
+  ultDescription: "\u5C04\u7A0B3\u306E\u6575\u30C9\u30ED\u30FC\u30F3\u7B49\u3092\u5FC5\u305A\u4E57\u3063\u53D6\u308B"
+  color: {r: 0, g: 0.5450981, b: 0.5450981, a: 1}

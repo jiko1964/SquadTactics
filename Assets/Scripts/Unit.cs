@@ -5,20 +5,20 @@ public class Unit : MonoBehaviour
     public string displayName = "ユニット";
     public int team = 1;
     public Vector2Int cell;
-    public int mobility = 25;
+    public CharacterData data;
 
-    [Header("ステータス")]
+    [Header("ステータス（データから自動入力）")]
     public int maxHp = 50;
     public int hp = 50;
-    public int attack = 50;    // 攻撃力
-    public int defense = 50;   // 防御力
-    public int precision = 50; // 精密
-    public int agility = 50;   // 敏捷性
-
-    [Header("武器データ")]
-    public WeaponData weapon;
+    public int attack = 50;
+    public int defense = 50;
+    public int precision = 50;
+    public int agility = 50;
+    public int mobility = 25;
+    public int search = 50;
 
     [Header("武器（データから自動入力）")]
+    public WeaponData weapon;
     public int weaponRange = 1;
     public int weaponPower = 10;
     public int weaponAccuracy = 80;
@@ -32,6 +32,23 @@ public class Unit : MonoBehaviour
 
     void Start()
     {
+        ApplyData();
+    }
+
+    public void ApplyData()
+    {
+        if (data != null)
+        {
+            displayName = data.characterName;
+            maxHp = data.maxHp;
+            attack = data.attack;
+            defense = data.defense;
+            precision = data.precision;
+            agility = data.agility;
+            mobility = data.mobility;
+            search = data.search;
+            weapon = data.defaultWeapon;
+        }
         if (weapon != null)
         {
             weaponPower = weapon.power;

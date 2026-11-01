@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 330836accaf91014a9793ad1191fac32, type: 3}
+  m_Name: C_Ren
+  m_EditorClassIdentifier: Assembly-CSharp::CharacterData
+  characterName: "\u30EC\u30F3"
+  maxHp: 65
+  attack: 65
+  defense: 50
+  precision: 60
+  agility: 40
+  mobility: 40
+  search: 45
+  defaultWeapon: {fileID: 11400000, guid: 87f0aa0cd7e044d41a3fab8ae9095414, type: 2}
+  ultName: "\u7834\u7815\u7832\u6483"
+  ultDescription: "\u7BC4\u56F22\u30FB\u5730\u5F62\u30C0\u30E12\u500D\u306E\u30B0\u30EC\u30CD\u30FC\u30C9"
+  color: {r: 1, g: 0.2705882, b: 0, a: 1}
