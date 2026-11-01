@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
@@ -23,9 +24,10 @@ public class GameController : MonoBehaviour
     private enum PreparedAction { None, Attack, Defend, Special, Ult }
 
     // 1体分の指示：移動先＋準備行動
+    // ※Noneは「指示なし」の内部的な既定値専用（プレイヤーの選択肢にはない）
     private class Order
     {
-        public Vector2Int? moveCell;  // null = 移動しない
+        public Vector2Int? moveCell; // null = 移動しない
         public PreparedAction prepared = PreparedAction.None;
         public GameObject marker;
     }
@@ -79,24 +81,23 @@ public class GameController : MonoBehaviour
 
         // 対象選択待ちのときのSpace＝攻撃をスキップ
         if (phase == Phase.Resolution && currentAttacker != null
-            && kb != null && kb.spaceKey.wasPressedThisFrame)
+        && kb != null && kb.spaceKey.wasPressedThisFrame)
         {
             Debug.Log($"{currentAttacker.displayName} は攻撃しない");
             EndAttackSelection();
             return;
         }
 
-        // 準備行動の選択待ち（Q/W/E/R/Sキー）
+        // 準備行動の選択待ち（Q/W/E/Rキー）
         if (choosingAction && selected != null && kb != null)
         {
             if (kb.qKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Attack); return; }
             if (kb.wKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Defend); return; }
             if (kb.eKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Special); return; }
             if (kb.rKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Ult); return; }
-            if (kb.sKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.None); return; }
         }
 
-        // 【指示入力中】制限時間タイマー（有効なときだけ）
+        // 制限時間タイマー（有効なときだけ）
         if (phase == Phase.Orders && orderTimeLimit > 0f && !choosingAction)
         {
             orderTimer -= Time.deltaTime;
@@ -109,14 +110,14 @@ public class GameController : MonoBehaviour
             }
         }
 
-        // 【指示入力中】Enter＝選択中ユニットのチーム（なければ未完了の先のチーム）が準備完了
+        // Enter＝選択中ユニットのチーム（なければ未完了の先のチーム）が準備完了
         if (phase == Phase.Orders && !choosingAction && kb != null
-            && (kb.enterKey.wasPressedThisFrame
-                || kb.numpadEnterKey.wasPressedThisFrame))
+        && (kb.enterKey.wasPressedThisFrame
+        || kb.numpadEnterKey.wasPressedThisFrame))
         {
             int team = selected != null
-                ? selected.team
-                : (teamReady[1] ? 2 : 1);
+            ? selected.team
+            : (teamReady[1] ? 2 : 1);
             ReadyTeam(team);
             return;
         }
@@ -124,18 +125,23 @@ public class GameController : MonoBehaviour
         if (Mouse.current == null) return;
         if (!Mouse.current.leftButton.wasPressedThisFrame) return;
 
+        // UIの上でのクリック（ボタン・パネル）は盤面クリックとして扱わない
+        if (EventSystem.current != null
+        && EventSystem.current.IsPointerOverGameObject())
+            return;
+
         Vector2 screenPos = Mouse.current.position.ReadValue();
         Vector3 world = Camera.main.ScreenToWorldPoint(
-            new Vector3(screenPos.x, screenPos.y, 0));
+        new Vector3(screenPos.x, screenPos.y, 0));
         Vector2Int cell = new Vector2Int(
-            Mathf.FloorToInt(world.x), Mathf.FloorToInt(world.y));
+        Mathf.FloorToInt(world.x), Mathf.FloorToInt(world.y));
         Unit clicked = FindUnitAt(cell);
 
-        // 【解決中】対象選択待ち：敵をクリックで攻撃、空マスでスキップ
+        // 対象選択待ち：敵をクリックで攻撃、空マスでスキップ
         if (phase == Phase.Resolution && currentAttacker != null)
         {
             if (clicked != null && clicked.team != currentAttacker.team
-                && attackable.Contains(cell))
+            && attackable.Contains(cell))
             {
                 Attack(currentAttacker, clicked);
             }
@@ -149,14 +155,14 @@ public class GameController : MonoBehaviour
 
         if (phase == Phase.Resolution) return;
 
-        // 【準備行動の選択待ち】空マスクリック＝行動なしで確定
+        // 空マスクリック＝防御で確定
         if (choosingAction)
         {
-            if (clicked == null) FinalizeOrder(PreparedAction.None);
+            if (clicked == null) FinalizeOrder(PreparedAction.Defend);
             return;
         }
 
-        // 【指示入力】移動先をクリック → 移動を予約し、準備行動の選択へ
+        // 移動先をクリック → 移動を予約し、準備行動の選択へ
         if (selected != null && movable.Contains(cell))
         {
             Order o = GetOrder(selected);
@@ -166,7 +172,7 @@ public class GameController : MonoBehaviour
             return;
         }
 
-        // 【指示入力】自分自身をクリック → 移動しない、準備行動の選択へ
+        // 自分自身をクリック → 移動しない、準備行動の選択へ
         if (selected != null && clicked == selected)
         {
             Order o = GetOrder(selected);
@@ -243,15 +249,15 @@ public class GameController : MonoBehaviour
     {
         if (label != null)
             label.text = teamReady[team]
-                ? $"Team {team}: READY"
-                : $"Team {team} Ready";
+            ? $"Team {team}: READY"
+            : $"Team {team} Ready";
         if (button != null)
         {
             var img = button.GetComponent<Image>();
             if (img != null)
                 img.color = teamReady[team]
-                    ? new Color(0.3f, 0.75f, 0.35f)
-                    : Color.white;
+                ? new Color(0.3f, 0.75f, 0.35f)
+                : Color.white;
         }
     }
 
@@ -261,9 +267,9 @@ public class GameController : MonoBehaviour
         choosingAction = true;
         if (actionPanel != null) actionPanel.SetActive(true);
         ShowAttackRangeFrom(selected, origin,
-            new Color(1f, 0f, 0f, 0.3f));
+        new Color(1f, 0f, 0f, 0.3f));
         Debug.Log($"{selected.displayName}：準備行動を選んでください " +
-                  "[Q]攻撃 [W]防御 [E]特殊装備 [R]ULT [S]なし");
+        "[Q]攻撃 [W]防御 [E]特殊装備 [R]ULT");
     }
 
     // ボタンから呼ばれる選択肢
@@ -271,7 +277,6 @@ public class GameController : MonoBehaviour
     public void ChooseDefend() { if (choosingAction) FinalizeOrder(PreparedAction.Defend); }
     public void ChooseSpecial() { if (choosingAction) FinalizeOrder(PreparedAction.Special); }
     public void ChooseUlt() { if (choosingAction) FinalizeOrder(PreparedAction.Ult); }
-    public void ChooseNone() { if (choosingAction) FinalizeOrder(PreparedAction.None); }
 
     void FinalizeOrder(PreparedAction action)
     {
@@ -331,6 +336,14 @@ public class GameController : MonoBehaviour
         UpdateTurnText();
 
         foreach (var kv in orders) ClearMarker(kv.Value);
+
+        // 防御準備は解決開始時点で有効化（そのターン受ける全攻撃がブロック対象）
+        foreach (var kv in orders)
+        {
+            if (kv.Value.prepared == PreparedAction.Defend)
+                kv.Key.defending = true;
+        }
+
         resolveIndex = 0;
         AdvanceResolution();
     }
@@ -354,7 +367,7 @@ public class GameController : MonoBehaviour
             {
                 Vector2Int dest = o.moveCell.Value;
                 if ((terrain == null || terrain.IsPassable(dest))
-                    && FindUnitAt(dest) == null)
+                && FindUnitAt(dest) == null)
                 {
                     u.cell = dest;
                     u.SnapToCell();
@@ -371,8 +384,9 @@ public class GameController : MonoBehaviour
             PreparedAction action = o?.prepared ?? PreparedAction.None;
             if (action == PreparedAction.Defend)
             {
-                u.defending = true;
-                Debug.Log($"{u.displayName} は防御態勢（ブロック判定は次ステップで実装）");
+                Debug.Log(u.shieldBlockRate > 0
+                ? $"{u.displayName} は防御態勢（ブロック率 {u.shieldBlockRate}%）"
+                : $"{u.displayName} は防御態勢（シールドなし：ブロック不可）");
                 resolveIndex++;
                 continue;
             }
@@ -409,7 +423,7 @@ public class GameController : MonoBehaviour
                     sr.color = Color.yellow;
                     u.transform.localScale = attackerOriginalScale * 1.2f;
                     ShowAttackRangeFrom(u, u.cell,
-                        new Color(1f, 0f, 0f, 0.35f));
+                    new Color(1f, 0f, 0f, 0.35f));
                     Debug.Log($"{u.displayName} の攻撃：対象を選んでください（攻撃しない場合は空マスかSpace）");
                     return;
                 }
@@ -418,7 +432,7 @@ public class GameController : MonoBehaviour
                 continue;
             }
 
-            resolveIndex++; // 行動なし
+            resolveIndex++; // 行動なし（指示なしユニット）
         }
 
         if (!gameOver) FinishRound();
@@ -454,11 +468,11 @@ public class GameController : MonoBehaviour
         {
             gameOver = true;
             string result = score[1] == score[2]
-                ? "Draw"
-                : $"Team {(score[1] > score[2] ? 1 : 2)} Wins!";
+            ? "Draw"
+            : $"Team {(score[1] > score[2] ? 1 : 2)} Wins!";
             Debug.Log($"最終ターン終了。スコア {score[1]} - {score[2]}");
             if (turnText != null)
-                turnText.text = $"Score {score[1]} - {score[2]} : {result}";
+                turnText.text = $"Score {score[1]} - {score[2]}: {result}";
             RefreshReadyUI();
             return;
         }
@@ -507,9 +521,9 @@ public class GameController : MonoBehaviour
             string r1 = teamReady[1] ? "Ready" : "...";
             string r2 = teamReady[2] ? "Ready" : "...";
             string timer = orderTimeLimit > 0f
-                ? $"  ({Mathf.CeilToInt(Mathf.Max(orderTimer, 0f))}s)"
-                : "";
-            turnText.text = $"Turn {turnNumber} - Orders  T1:{r1} T2:{r2}{timer}";
+            ? $" ({Mathf.CeilToInt(Mathf.Max(orderTimer, 0f))}s)"
+            : "";
+            turnText.text = $"Turn {turnNumber} - Orders T1:{r1} T2:{r2}{timer}";
         }
     }
 
@@ -538,7 +552,7 @@ public class GameController : MonoBehaviour
         o.marker = Instantiate(highlightPrefab);
         o.marker.transform.position = new Vector3(cell.x + 0.5f, cell.y + 0.5f, 0);
         o.marker.GetComponent<SpriteRenderer>().color
-            = new Color(0.9f, 0.9f, 0.9f, 0.55f);
+        = new Color(0.9f, 0.9f, 0.9f, 0.55f);
     }
 
     void SetMarkerColor(Order o, PreparedAction action)
@@ -574,11 +588,15 @@ public class GameController : MonoBehaviour
 
     void Attack(Unit attacker, Unit target)
     {
+        // ハンマーはシールドの防御補正とブロックを無視する
+        bool isHammer = attacker.weapon != null
+        && attacker.weapon.name == "W_Hammer";
+
         int hitRate = Mathf.Clamp(
-            Mathf.RoundToInt(attacker.weaponAccuracy
-                + (attacker.precision - target.agility) / 2f
-                + (attacker.movedThisTurn ? 0 : 10)),
-            5, 95);
+        Mathf.RoundToInt(attacker.weaponAccuracy
+        + (attacker.precision - target.agility) / 2f
+        + (attacker.movedThisTurn ? 0 : 10)),
+        5, 95);
 
         int roll = Random.Range(1, 101);
         if (roll > hitRate)
@@ -587,13 +605,55 @@ public class GameController : MonoBehaviour
         }
         else
         {
+            int defBonus = target.armorBonus
+            - (isHammer ? target.shieldBonus : 0);
+            if (isHammer && (target.shieldBonus > 0 || target.shieldBlockRate > 0))
+                Debug.Log("ハンマーはシールドの防御補正とブロックを無視");
+
             float raw = (attacker.attack + attacker.weaponPower) / 2f
-                        * 100f / (100 + target.defense + target.armorBonus);
+            * 100f / (100 + target.defense + defBonus);
             if (!attacker.movedThisTurn) raw *= 1.1f;
             int damage = Mathf.Max(1, Mathf.RoundToInt(raw));
 
+            Debug.Log($"{attacker.displayName} の攻撃！ 命中率 {hitRate}% → 出目 {roll} で 命中");
+
+            // シールドのブロック判定（防御準備中のみ、ハンマーは対象外）
+            if (target.defending && target.shieldBlockRate > 0 && !isHammer)
+            {
+                int blockRoll = Random.Range(1, 101);
+                if (blockRoll <= target.shieldBlockRate)
+                {
+                    Debug.Log($"{target.displayName} のシールドがブロック成功（出目 {blockRoll} ≤ {target.shieldBlockRate}%）→ ダメージ無効");
+
+                    // カウンターシールド：軽減後ダメージの一部を反射
+                    if (target.hasCounterShield)
+                    {
+                        bool melee = attacker.weaponRange <= 2;
+                        int reflect = Mathf.RoundToInt(
+                        damage * (melee ? 0.75f : 0.5f));
+                        if (reflect > 0)
+                        {
+                            attacker.hp -= reflect;
+                            Debug.Log($"カウンターシールドの反射！ {attacker.displayName} に {reflect} ダメージ（残りHP {Mathf.Max(attacker.hp, 0)}）");
+                            if (attacker.hp <= 0)
+                            {
+                                Debug.Log($"{attacker.displayName} を撃破！");
+                                attacker.gameObject.SetActive(false);
+                                score[target.team] += 2;
+                                Debug.Log($"チーム{target.team} +2点（スコア {score[1]} - {score[2]}）");
+                            }
+                        }
+                    }
+
+                    attacker.hasAttacked = true;
+                    CheckWin();
+                    return;
+                }
+                Debug.Log($"{target.displayName} のブロック失敗（出目 {blockRoll} > {target.shieldBlockRate}%）");
+            }
+
             target.hp -= damage;
-            Debug.Log($"{attacker.displayName} の攻撃！ 命中率 {hitRate}% → 出目 {roll} で 命中。{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
+            Debug.Log($"{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
             if (target.hp <= 0)
             {
                 Debug.Log($"{target.displayName} を撃破！");

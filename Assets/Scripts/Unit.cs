@@ -18,6 +18,11 @@ public class Unit : MonoBehaviour
     public int search = 50;
     public int armorBonus = 0; // 盾・鎧の防御ボーナス合計
 
+    [Header("シールド（データから自動入力）")]
+    public int shieldBonus = 0;      // シールド系だけの防御補正（ハンマーはこれを無視）
+    public int shieldBlockRate = 0;  // 0ならブロック不可
+    public bool hasCounterShield = false;
+
     [Header("武器（データから自動入力）")]
     public WeaponData weapon;
     public int weaponRange = 1;
@@ -29,7 +34,7 @@ public class Unit : MonoBehaviour
     [HideInInspector]
     public bool hasAttacked = false;
     [HideInInspector]
-    public bool defending = false; // 防御準備をしたらtrue（効果は次ステップ）
+    public bool defending = false; // 防御準備をしたらtrue
 
     public int MoveTiles => Mathf.Max(1, mobility / 7);
 
@@ -52,8 +57,11 @@ public class Unit : MonoBehaviour
             search = data.search;
             weapon = data.defaultWeapon;
 
-            // 装備の反映：防御ボーナス合算と機動力ペナルティ
+            // 装備の反映：防御ボーナス合算と機動力ペナルティ、シールド情報
             armorBonus = 0;
+            shieldBonus = 0;
+            shieldBlockRate = 0;
+            hasCounterShield = false;
             if (data.equipment != null)
             {
                 foreach (var item in data.equipment)
@@ -61,6 +69,15 @@ public class Unit : MonoBehaviour
                     if (item == null) continue;
                     armorBonus += item.defenseBonus;
                     mobility -= item.mobilityPenalty;
+                    if (item.kind == ItemKind.Shield)
+                    {
+                        shieldBonus += item.defenseBonus;
+                        if (item.blockRate > shieldBlockRate)
+                        {
+                            shieldBlockRate = item.blockRate;
+                            hasCounterShield = item.itemName == "カウンターシールド";
+                        }
+                    }
                 }
             }
         }
