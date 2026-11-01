@@ -152,6 +152,7 @@ MonoBehaviour:
   displayName: "\u30E6\u30AD"
   team: 1
   cell: {x: 2, y: 3}
+  mobility: 25
 --- !u!212 &115791026
 SpriteRenderer:
   serializedVersion: 3
@@ -199,7 +200,7 @@ SpriteRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 1
+  m_SortingOrder: 2
   m_MaskInteraction: 0
   m_Sprite: {fileID: -2413806693520163455, guid: a86470a33a6bf42c4b3595704624658b, type: 3}
   m_Color: {r: 0, g: 0, b: 1, a: 1}
@@ -260,6 +261,7 @@ MonoBehaviour:
   displayName: "\u30B5\u30AF\u30E9"
   team: 2
   cell: {x: 15, y: 15}
+  mobility: 45
 --- !u!212 &139048940
 SpriteRenderer:
   serializedVersion: 3
@@ -307,7 +309,7 @@ SpriteRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 1
+  m_SortingOrder: 2
   m_MaskInteraction: 0
   m_Sprite: {fileID: -2413806693520163455, guid: a86470a33a6bf42c4b3595704624658b, type: 3}
   m_Color: {r: 1, g: 0, b: 0, a: 1}
@@ -368,6 +370,7 @@ MonoBehaviour:
   displayName: "\u30CF\u30E4\u30C6"
   team: 2
   cell: {x: 15, y: 14}
+  mobility: 50
 --- !u!212 &396830918
 SpriteRenderer:
   serializedVersion: 3
@@ -415,7 +418,7 @@ SpriteRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 1
+  m_SortingOrder: 2
   m_MaskInteraction: 0
   m_Sprite: {fileID: -2413806693520163455, guid: a86470a33a6bf42c4b3595704624658b, type: 3}
   m_Color: {r: 1, g: 0, b: 0, a: 1}
@@ -613,6 +616,7 @@ MonoBehaviour:
   displayName: "\u30AB\u30A8\u30C7"
   team: 1
   cell: {x: 2, y: 1}
+  mobility: 40
 --- !u!212 &735918953
 SpriteRenderer:
   serializedVersion: 3
@@ -660,7 +664,7 @@ SpriteRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 1
+  m_SortingOrder: 2
   m_MaskInteraction: 0
   m_Sprite: {fileID: -2413806693520163455, guid: a86470a33a6bf42c4b3595704624658b, type: 3}
   m_Color: {r: 0, g: 0, b: 1, a: 1}
@@ -697,7 +701,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 992304816}
-  - component: {fileID: 992304815}
+  - component: {fileID: 992304817}
   m_Layer: 0
   m_Name: GameManager
   m_TagString: Untagged
@@ -705,18 +709,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &992304815
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 992304814}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: b167d34d135177e47be21f124cf584c3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::ClickSelect
 --- !u!4 &992304816
 Transform:
   m_ObjectHideFlags: 0
@@ -732,6 +724,19 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &992304817
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 992304814}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 12e7f5b00419ca9449ddff85c1d759e7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::GameController
+  highlightPrefab: {fileID: 5629111528098340166, guid: 3f2a033753196fa47b6620c0f6fd5000, type: 3}
 --- !u!1 &1056625480
 GameObject:
   m_ObjectHideFlags: 0
@@ -765,6 +770,7 @@ MonoBehaviour:
   displayName: "\u30E6\u30CB\u30C3\u30C8"
   team: 2
   cell: {x: 15, y: 16}
+  mobility: 35
 --- !u!212 &1056625482
 SpriteRenderer:
   serializedVersion: 3
@@ -812,7 +818,7 @@ SpriteRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 1
+  m_SortingOrder: 2
   m_MaskInteraction: 0
   m_Sprite: {fileID: -2413806693520163455, guid: a86470a33a6bf42c4b3595704624658b, type: 3}
   m_Color: {r: 1, g: 0, b: 0, a: 1}
@@ -4313,6 +4319,7 @@ MonoBehaviour:
   displayName: "\u30B4\u30A6"
   team: 1
   cell: {x: 2, y: 2}
+  mobility: 25
 --- !u!212 &1861105593
 SpriteRenderer:
   serializedVersion: 3
@@ -4360,7 +4367,7 @@ SpriteRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 1
+  m_SortingOrder: 2
   m_MaskInteraction: 0
   m_Sprite: {fileID: -2413806693520163455, guid: a86470a33a6bf42c4b3595704624658b, type: 3}
   m_Color: {r: 0, g: 0, b: 1, a: 1}
