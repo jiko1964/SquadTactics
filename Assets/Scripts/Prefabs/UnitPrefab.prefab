@@ -117,9 +117,20 @@ MonoBehaviour:
   agility: 60
   mobility: 40
   search: 50
+  armorBonus: 0
+  shieldBonus: 0
+  shieldBlockRate: 0
+  hasCounterShield: 0
   weapon: {fileID: 11400000, guid: 1758c60363373ca4a8cfffd96c6a6c2c, type: 2}
   weaponRange: 2
   weaponPower: 15
   weaponAccuracy: 80
+  exPoints: 0
+  poisoned: 0
+  beaconed: 0
+  stunTurns: 0
+  poisonSourceTeam: 0
   movedThisTurn: 0
   hasAttacked: 0
+  defending: 0
+  ultGuarding: 0

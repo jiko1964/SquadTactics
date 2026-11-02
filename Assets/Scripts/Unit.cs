@@ -7,6 +7,8 @@ public class Unit : MonoBehaviour
     public Vector2Int cell;
     public CharacterData data;
 
+    public const int MaxEx = 2; // EXの保持上限
+
     [Header("ステータス（データから自動入力）")]
     public int maxHp = 50;
     public int hp = 50;
@@ -19,8 +21,8 @@ public class Unit : MonoBehaviour
     public int armorBonus = 0; // 盾・鎧の防御ボーナス合計
 
     [Header("シールド（データから自動入力）")]
-    public int shieldBonus = 0; // シールド系だけの防御補正（ハンマーはこれを無視）
-    public int shieldBlockRate = 0; // 0ならブロック不可
+    public int shieldBonus = 0;      // シールド系だけの防御補正（ハンマーはこれを無視）
+    public int shieldBlockRate = 0;  // 0ならブロック不可
     public bool hasCounterShield = false;
 
     [Header("武器（データから自動入力）")]
@@ -28,6 +30,9 @@ public class Unit : MonoBehaviour
     public int weaponRange = 1;
     public int weaponPower = 10;
     public int weaponAccuracy = 80;
+
+    [Header("EXポイント（初期0）")]   //
+    public int exPoints = 0;          // 
 
     [Header("状態異常")]
     public bool poisoned = false;
@@ -42,6 +47,8 @@ public class Unit : MonoBehaviour
     public bool hasAttacked = false;
     [HideInInspector]
     public bool defending = false; // 防御準備をしたらtrue
+    [HideInInspector]
+    public bool ultGuarding = false; // 鉄壁（ゴウのULT）発動中
 
     public int MoveTiles => Mathf.Max(1, mobility / 7);
 
