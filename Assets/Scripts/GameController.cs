@@ -28,7 +28,7 @@ public class GameController : MonoBehaviour
     {
         None, Attack, KaedeMove, KaedeAttack, YukiSnipe, SakuraHeal, Grenade,
         TrapPlace, SmokePlace, DroneAttack, HackTarget, DroneDummyTarget,
-        HackChoice
+        HackChoice, DroneCreateType, DronePlace
     }
 
     // 1体分の指示：移動先＋準備行動
@@ -38,7 +38,6 @@ public class GameController : MonoBehaviour
         public Vector2Int? moveCell;  // null = 移動しない
         public PreparedAction prepared = PreparedAction.None;
         public string specialChoice;  // 特殊装備準備で選んだ装備名（切除を含む）
-        public DroneType droneType = DroneType.Damage; // 作成するドローンの種類
         public GameObject marker;
     }
 
@@ -125,7 +124,8 @@ public class GameController : MonoBehaviour
     private int pendingHackType = 1;       // 実行待ちのハッキングの狙い
     private DroneInfo pendingHackTarget;   // 種別選択待ちのハッキング対象ドローン
     private bool pendingUltHack = false;   // オーバーライド（確実に権限取得）かどうか
-    private DroneType pendingDroneType = DroneType.Damage; // 作成待ちのドローンの種類
+    private DroneType pendingDroneType = DroneType.Damage; // 解決時に選ばれた、作成するドローンの種類
+    private Vector2Int pendingDroneCell; // ドローンの設置先（ダミーの姿指定まで持ち越す）
 
     // 同時入力：チームごとの準備完了フラグと制限時間タイマー
     private readonly bool[] teamReady = new bool[3];
@@ -136,7 +136,6 @@ public class GameController : MonoBehaviour
     // 特殊装備準備を選んで、使う装備の選択待ちか
     private bool choosingSpecial = false;
     // ドローンの種類の選択待ちか
-    private bool choosingDroneType = false;
 
     // 解決用
     private List<Unit> initiative = new();
@@ -210,6 +209,26 @@ public class GameController : MonoBehaviour
             return;
         }
 
+        // 【解決中】ドローン作成：種類を数字キーで選んだら、設置マスの選択へ進む
+        if (phase == Phase.Resolution && pauseKind == PauseKind.DroneCreateType
+            && currentAttacker != null && kb != null)
+        {
+            int pick = -1;
+            if (kb.digit1Key.wasPressedThisFrame) pick = 0;
+            else if (kb.digit2Key.wasPressedThisFrame) pick = 1;
+            else if (kb.digit3Key.wasPressedThisFrame) pick = 2;
+            else if (kb.digit4Key.wasPressedThisFrame) pick = 3;
+            if (pick >= 0)
+            {
+                pendingDroneType = (DroneType)pick;
+                Debug.Log($"{currentAttacker.displayName} のドローン：{DroneTypeLabel(pendingDroneType)}を作成する");
+                BeginPause(currentAttacker, PauseKind.DronePlace);
+                ShowDronePlaceRange(currentAttacker);
+                Debug.Log("設置するマスをクリックしてください（Spaceでキャンセル）");
+            }
+            return;
+        }
+
         // トラップ設置中：数字キーで種類を切り替える
         if (phase == Phase.Resolution && pauseKind == PauseKind.TrapPlace
             && kb != null)
@@ -234,24 +253,6 @@ public class GameController : MonoBehaviour
                 if (pick >= 0 && pick < pendingSpecialOptions.Count)
                 {
                     FinalizeSpecialOrder(pendingSpecialOptions[pick]);
-                    return;
-                }
-            }
-            // ドローンの種類の選択待ち
-            else if (choosingDroneType)
-            {
-                int pick = -1;
-                if (kb.digit1Key.wasPressedThisFrame) pick = 0;
-                else if (kb.digit2Key.wasPressedThisFrame) pick = 1;
-                else if (kb.digit3Key.wasPressedThisFrame) pick = 2;
-                else if (kb.digit4Key.wasPressedThisFrame) pick = 3;
-                if (pick >= 0)
-                {
-                    Order o = GetOrder(selected);
-                    o.specialChoice = "ドローンユニット";
-                    o.droneType = (DroneType)pick;
-                    choosingDroneType = false;
-                    FinalizeOrder(PreparedAction.Special);
                     return;
                 }
             }
@@ -385,6 +386,9 @@ public class GameController : MonoBehaviour
         switch (pauseKind)
         {
             case PauseKind.HackChoice:
+                return; // 数字キー専用（Update側で処理）。クリックは無視
+
+            case PauseKind.DroneCreateType:
                 return; // 数字キー専用（Update側で処理）。クリックは無視
 
             case PauseKind.KaedeMove:
@@ -546,11 +550,31 @@ public class GameController : MonoBehaviour
                 EndAttackSelection();
                 return;
 
+            case PauseKind.DronePlace:
+                // ハイライトされたマスをクリックで設置先を決める
+                if (movable.Contains(cell))
+                {
+                    if (pendingDroneType == DroneType.Dummy)
+                    {
+                        pendingDroneCell = cell;
+                        BeginPause(currentAttacker, PauseKind.DroneDummyTarget);
+                        Debug.Log($"{currentAttacker.displayName} のダミードローン：姿を借りる味方をクリックしてください");
+                        return;
+                    }
+                    CreateDroneAt(currentAttacker, pendingDroneType, cell, null);
+                }
+                else
+                {
+                    Debug.Log($"{currentAttacker.displayName} はドローンを作成しなかった");
+                }
+                EndAttackSelection();
+                return;
+
             case PauseKind.DroneDummyTarget:
-                // ダミードローンが姿を借りる味方をクリックで選ぶ
+                // ダミードローンが姿を借りる味方をクリックで選ぶ（設置マスは選択済み）
                 if (clicked != null && clicked.team == currentAttacker.team)
                 {
-                    CreateDrone(currentAttacker, DroneType.Dummy, clicked);
+                    CreateDroneAt(currentAttacker, DroneType.Dummy, pendingDroneCell, clicked);
                 }
                 else
                 {
@@ -710,18 +734,9 @@ public class GameController : MonoBehaviour
     }
 
     // 特殊装備を決めて指示を確定する
-    // （ドローンは、さらに種類の選択に進む。ハッキングの種別は解決時に選ぶ）
+    // （ドローンの種類と設置マス、ハッキングの種別は、いずれも解決時に選ぶ）
     void FinalizeSpecialOrder(string choice)
     {
-        if (choice == "ドローンユニット")
-        {
-            choosingSpecial = false;
-            choosingDroneType = true;
-            pendingSpecialOptions = new List<string>
-                { "ダメージドローン", "センサードローン", "ビーコン弾ドローン", "ダミードローン" };
-            Debug.Log($"{selected.displayName} のドローン：作成する種類を数字キーで選んでください [1]ダメージ [2]センサー [3]ビーコン弾 [4]ダミー");
-            return;
-        }
         Order o = GetOrder(selected);
         o.specialChoice = choice;
         FinalizeOrder(PreparedAction.Special);
@@ -737,7 +752,6 @@ public class GameController : MonoBehaviour
         }
 
         choosingSpecial = false;
-        choosingDroneType = false;
         pendingSpecialOptions = new List<string>();
 
         Unit unit = selected;
@@ -1243,7 +1257,6 @@ public class GameController : MonoBehaviour
             }
             choice = options[0];
         }
-        pendingDroneType = o?.droneType ?? DroneType.Damage;
         return ExecuteSpecial(u, choice);
     }
 
@@ -1331,20 +1344,20 @@ public class GameController : MonoBehaviour
                 Debug.Log($"{u.displayName} のスモークグレネード：煙幕の中心マスを選んでください（射程4、残り {SmokeUsesLeft(u)} 回）");
                 return true;
 
-            case "ドローンユニット": // 作成に1ターン。種類は指示時点で選択済み
+            case "ドローンユニット": // 作成に1ターン。種類と設置マスは解決時に選ぶ
                 if (FindDroneControlledBy(u) != null)
                 {
                     Debug.Log($"{u.displayName} のドローン：すでにドローンを運用中のため作成できない");
                     return false;
                 }
-                if (pendingDroneType == DroneType.Dummy)
+                if (DronePlaceCells(u).Count == 0)
                 {
-                    BeginPause(u, PauseKind.DroneDummyTarget);
-                    Debug.Log($"{u.displayName} のダミードローン：姿を借りる味方をクリックしてください");
-                    return true;
+                    Debug.Log($"{u.displayName} のドローン：周囲に設置できるマスがなく、作成できなかった");
+                    return false;
                 }
-                CreateDrone(u, pendingDroneType, null);
-                return false;
+                BeginPause(u, PauseKind.DroneCreateType);
+                Debug.Log($"{u.displayName} のドローン：作成する種類を数字キーで選んでください [1]ダメージ [2]センサー [3]ビーコン弾 [4]ダミー（Spaceでキャンセル）");
+                return true;
 
             case "ハッキングユニット": // 半径3マス以内の敵ドローンを狙う
                 if (!AnyEnemyDroneWithin(u.team, u.cell, 3))
@@ -1581,9 +1594,10 @@ public class GameController : MonoBehaviour
     }
 
     // ドローンを作成する（操作者の隣接マスに出現。置けなければ null）
-    DroneInfo CreateDrone(Unit controller, DroneType type, Unit dummyTarget)
+    // ドローンを設置できるマス（作成者の周囲8マスで、通行可能・ユニット・ドローンなし）
+    List<Vector2Int> DronePlaceCells(Unit controller)
     {
-        Vector2Int? spawn = null;
+        var cells = new List<Vector2Int>();
         var dirs = new Vector2Int[]
         {
             new(1, 0), new(-1, 0), new(0, 1), new(0, -1),
@@ -1596,14 +1610,41 @@ public class GameController : MonoBehaviour
             if (terrain != null && !terrain.IsPassable(c)) continue;
             if (FindUnitAt(c) != null) continue;
             if (FindDroneAt(c) != null) continue;
-            spawn = c;
-            break;
+            cells.Add(c);
         }
-        if (spawn == null) return null;
+        return cells;
+    }
 
+    // 自動配置（ULTの即作成用）：空きマスのうち最初に見つかったマス
+    Vector2Int? FindDroneSpawnCell(Unit controller)
+    {
+        var cells = DronePlaceCells(controller);
+        return cells.Count > 0 ? cells[0] : null;
+    }
+
+    // 設置マスの選択肢を表示する
+    void ShowDronePlaceRange(Unit unit)
+    {
+        ClearHighlights();
+        foreach (var c in DronePlaceCells(unit))
+        {
+            movable.Add(c);
+            AddHighlight(c, new Color(0.4f, 0.85f, 1f, 0.45f));
+        }
+    }
+
+    DroneInfo CreateDrone(Unit controller, DroneType type, Unit dummyTarget)
+    {
+        Vector2Int? spawn = FindDroneSpawnCell(controller);
+        if (spawn == null) return null;
+        return CreateDroneAt(controller, type, spawn.Value, dummyTarget);
+    }
+
+    DroneInfo CreateDroneAt(Unit controller, DroneType type, Vector2Int spawn, Unit dummyTarget)
+    {
         var visual = Instantiate(highlightPrefab);
         visual.transform.position
-            = new Vector3(spawn.Value.x + 0.5f, spawn.Value.y + 0.5f, 0);
+            = new Vector3(spawn.x + 0.5f, spawn.y + 0.5f, 0);
         visual.transform.localScale = Vector3.one * 0.7f;
         visual.GetComponent<SpriteRenderer>().sortingOrder = 1;
 
@@ -1613,7 +1654,7 @@ public class GameController : MonoBehaviour
             controller = controller,
             team = controller.team,
             type = type,
-            cell = spawn.Value,
+            cell = spawn,
             hp = 10,
             visual = visual,
             dummyTarget = dummyTarget,
@@ -1627,7 +1668,7 @@ public class GameController : MonoBehaviour
                 : new Color(1f, 0.5f, 0.35f, 0.9f);
         SetDroneVisualColor(d);
         drones.Add(d);
-        Debug.Log($"{controller.displayName} は{DroneTypeLabel(type)}を作成した（{spawn.Value} に出現、HP10）");
+        Debug.Log($"{controller.displayName} は{DroneTypeLabel(type)}を作成した（{spawn} に出現、HP10）");
         return d;
     }
 
@@ -2799,6 +2840,44 @@ public class GameController : MonoBehaviour
             }
         }
         Debug.Log($"{unit.displayName} の押し出し先がなかった（その場に留まる）");
+    }
+
+
+    // ===== HUD連携（HudControllerから使う公開API） =====
+    public Unit SelectedUnit => selected;
+
+    // HUDのユニットカードをクリックしたとき（盤面でユニットをクリックして選び直すのと同じ扱い）
+    public void HudSelect(Unit u)
+    {
+        if (u == null || !u.gameObject.activeSelf) return;
+        if (phase != Phase.Orders) return;
+        if (orderingDrone != null || choosingAction) return;
+        if (teamReady[u.team])
+        {
+            Debug.Log($"チーム{u.team} は準備完了済みのため、指示を変更できません");
+            return;
+        }
+        ClearOrder(u);
+        Select(u);
+        Debug.Log($"{u.displayName} を選択（EX {u.exPoints}/{Unit.MaxEx}）。移動先を指定（自分をクリックで移動しない）");
+    }
+
+    // そのユニットの現在の指示を短い文字列で返す（未指示なら ""）
+    public string OrderTextFor(Unit u)
+    {
+        if (u == null || !orders.TryGetValue(u, out Order o)
+            || o.prepared == PreparedAction.None)
+            return "";
+        string move = o.moveCell.HasValue ? $"{o.moveCell.Value} へ移動" : "移動なし";
+        string act = o.prepared switch
+        {
+            PreparedAction.Attack => "攻撃準備",
+            PreparedAction.Defend => "防御準備",
+            PreparedAction.Special => "特殊：" + (o.specialChoice ?? ""),
+            PreparedAction.Ult => "ULT準備",
+            _ => ""
+        };
+        return move + "＋" + act;
     }
 
     void Select(Unit u)
