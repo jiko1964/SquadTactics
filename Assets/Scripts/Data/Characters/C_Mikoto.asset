@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 330836accaf91014a9793ad1191fac32, type: 3}
   m_Name: C_Mikoto
   m_EditorClassIdentifier: Assembly-CSharp::CharacterData
-  characterName: "\u30AD\u30E3\u30E9"
+  characterName: "\u30DF\u30B3\u30C8"
   maxHp: 60
   attack: 45
   defense: 45

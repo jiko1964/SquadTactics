@@ -26,7 +26,9 @@ public class GameController : MonoBehaviour
     // 解決中の一時停止の種類
     private enum PauseKind
     {
-        None, Attack, KaedeMove, KaedeAttack, YukiSnipe, SakuraHeal, Grenade
+        None, Attack, KaedeMove, KaedeAttack, YukiSnipe, SakuraHeal, Grenade,
+        TrapPlace, SmokePlace, DroneAttack, HackTarget, DroneDummyTarget,
+        HackChoice
     }
 
     // 1体分の指示：移動先＋準備行動
@@ -35,6 +37,8 @@ public class GameController : MonoBehaviour
     {
         public Vector2Int? moveCell;  // null = 移動しない
         public PreparedAction prepared = PreparedAction.None;
+        public string specialChoice;  // 特殊装備準備で選んだ装備名（切除を含む）
+        public DroneType droneType = DroneType.Damage; // 作成するドローンの種類
         public GameObject marker;
     }
 
@@ -60,12 +64,79 @@ public class GameController : MonoBehaviour
     };
     private readonly int[] nexusScored = new int[3];
 
+    // センサーユニット展開中のユニット（範囲は使用者を中心に追従する）
+    private readonly List<Unit> sensorUsers = new();
+
+    // トラップ（7-2）
+    private enum TrapType { Damage, Stun, Beacon }
+    private class TrapInfo
+    {
+        public Vector2Int cell;
+        public TrapType type;
+        public int ownerTeam;
+        public GameObject visual;
+    }
+    private readonly List<TrapInfo> traps = new();
+    private readonly Dictionary<Unit, int> trapUses = new();
+    private TrapType pendingTrapType = TrapType.Damage;
+
+    // 特殊装備の選択待ち（使う装備の名前リスト）
+    private List<string> pendingSpecialOptions = new();
+
+    // スモークグレネード（7-2）
+    private class SmokeCloud
+    {
+        public readonly List<Vector2Int> cells = new();
+        public readonly List<GameObject> visuals = new();
+        public int remainingTurnEnds;
+    }
+    private readonly List<SmokeCloud> smokes = new();
+    private readonly Dictionary<Unit, int> smokeUses = new();
+
+    // ドローンとハッキング（7-3）
+    private enum DroneType { Damage, Sensor, Beacon, Dummy }
+    private class DroneInfo
+    {
+        public Unit owner;       // 作成者
+        public Unit controller;  // 現在の操作者（権限取得で変わる）
+        public int team;         // 現在のコントロールチーム
+        public DroneType type;
+        public Vector2Int cell;
+        public int hp = 10;
+        public bool disabled;    // 機能停止中
+        public GameObject visual;
+        public Unit dummyTarget; // ダミーが姿を借りる味方
+        public int baseAttack;   // 作成者の攻撃力（ダメージドローンの計算用）
+        public int searchBonus;  // 作成者の索敵÷25（センサードローンの範囲用）
+        public int bonusActions; // ドローンラッシュ：このターンの追加行動回数
+        public Color baseColor;
+    }
+    private readonly List<DroneInfo> drones = new();
+    private readonly Dictionary<DroneInfo, Vector2Int> droneOrders = new();
+    private DroneInfo orderingDrone;       // 指示入力中：移動先を選んでいるドローン
+    private DroneInfo currentDrone;        // 解決中：攻撃対象の選択待ちドローン
+    private int droneActsLeft = 0;
+    private Unit dronePauseController;     // ドローンの一時停止が終わったらスロットを終える操作者
+    private Color droneOriginalColor;
+    // 連携追撃（ステップ8）：このターン最初にその敵へ命中させた攻撃者と発動済みチーム
+    private readonly Dictionary<Unit, Unit> firstHitBy = new();
+    private readonly HashSet<int> linkageUsedTeams = new();
+
+    private int pendingHackType = 1;       // 実行待ちのハッキングの狙い
+    private DroneInfo pendingHackTarget;   // 種別選択待ちのハッキング対象ドローン
+    private bool pendingUltHack = false;   // オーバーライド（確実に権限取得）かどうか
+    private DroneType pendingDroneType = DroneType.Damage; // 作成待ちのドローンの種類
+
     // 同時入力：チームごとの準備完了フラグと制限時間タイマー
     private readonly bool[] teamReady = new bool[3];
     private float orderTimer = 0f;
 
     // 指示入力用：移動先を決めた後、準備行動の選択待ちか
     private bool choosingAction = false;
+    // 特殊装備準備を選んで、使う装備の選択待ちか
+    private bool choosingSpecial = false;
+    // ドローンの種類の選択待ちか
+    private bool choosingDroneType = false;
 
     // 解決用
     private List<Unit> initiative = new();
@@ -98,10 +169,16 @@ public class GameController : MonoBehaviour
         var kb = Keyboard.current;
 
         // 解決中の一時停止中のSpace＝キャンセル（疾風斬の移動待ちだけは「移動しない」で次へ）
-        if (phase == Phase.Resolution && currentAttacker != null
-            && kb != null && kb.spaceKey.wasPressedThisFrame)
+        if (phase == Phase.Resolution && kb != null
+            && kb.spaceKey.wasPressedThisFrame
+            && (currentAttacker != null || currentDrone != null))
         {
-            if (pauseKind == PauseKind.KaedeMove)
+            if (currentDrone != null)
+            {
+                Debug.Log($"{DroneName(currentDrone)} は攻撃しない");
+                EndDronePause();
+            }
+            else if (pauseKind == PauseKind.KaedeMove)
             {
                 Debug.Log($"{currentAttacker.displayName} は追加移動しない");
                 StartKaedeAttacks();
@@ -114,12 +191,73 @@ public class GameController : MonoBehaviour
             return;
         }
 
+        // 【解決中】ハッキングの種別選択：対象は選択済み。数字キーで種別を決めて解決
+        if (phase == Phase.Resolution && pauseKind == PauseKind.HackChoice
+            && currentAttacker != null && kb != null)
+        {
+            int pick = -1;
+            if (kb.digit1Key.wasPressedThisFrame) pick = 1;
+            else if (kb.digit2Key.wasPressedThisFrame) pick = 2;
+            else if (kb.digit3Key.wasPressedThisFrame) pick = 3;
+            if (pick > 0 && pendingHackTarget != null)
+            {
+                pendingHackType = pick;
+                Debug.Log($"ハッキングの種別：{HackTypeLabel(pick)}");
+                ResolveHack(currentAttacker, pendingHackTarget);
+                pendingHackTarget = null;
+                EndAttackSelection();
+            }
+            return;
+        }
+
+        // トラップ設置中：数字キーで種類を切り替える
+        if (phase == Phase.Resolution && pauseKind == PauseKind.TrapPlace
+            && kb != null)
+        {
+            if (kb.digit1Key.wasPressedThisFrame) SetTrapType(TrapType.Damage);
+            else if (kb.digit2Key.wasPressedThisFrame) SetTrapType(TrapType.Stun);
+            else if (kb.digit3Key.wasPressedThisFrame) SetTrapType(TrapType.Beacon);
+        }
+
         // 準備行動の選択待ち（Q/W/E/Rキー）
         if (choosingAction && selected != null && kb != null)
         {
+            // 特殊装備の選択待ちなら、数字キーで使う装備を決めて指示確定
+            if (choosingSpecial)
+            {
+                int pick = -1;
+                if (kb.digit1Key.wasPressedThisFrame) pick = 0;
+                else if (kb.digit2Key.wasPressedThisFrame) pick = 1;
+                else if (kb.digit3Key.wasPressedThisFrame) pick = 2;
+                else if (kb.digit4Key.wasPressedThisFrame) pick = 3;
+                else if (kb.digit5Key.wasPressedThisFrame) pick = 4;
+                if (pick >= 0 && pick < pendingSpecialOptions.Count)
+                {
+                    FinalizeSpecialOrder(pendingSpecialOptions[pick]);
+                    return;
+                }
+            }
+            // ドローンの種類の選択待ち
+            else if (choosingDroneType)
+            {
+                int pick = -1;
+                if (kb.digit1Key.wasPressedThisFrame) pick = 0;
+                else if (kb.digit2Key.wasPressedThisFrame) pick = 1;
+                else if (kb.digit3Key.wasPressedThisFrame) pick = 2;
+                else if (kb.digit4Key.wasPressedThisFrame) pick = 3;
+                if (pick >= 0)
+                {
+                    Order o = GetOrder(selected);
+                    o.specialChoice = "ドローンユニット";
+                    o.droneType = (DroneType)pick;
+                    choosingDroneType = false;
+                    FinalizeOrder(PreparedAction.Special);
+                    return;
+                }
+            }
             if (kb.qKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Attack); return; }
             if (kb.wKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Defend); return; }
-            if (kb.eKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Special); return; }
+            if (kb.eKey.wasPressedThisFrame) { BeginSpecialChoice(); return; }
             if (kb.rKey.wasPressedThisFrame) { FinalizeOrder(PreparedAction.Ult); return; }
         }
 
@@ -137,7 +275,8 @@ public class GameController : MonoBehaviour
         }
 
         // 【指示入力中】Enter＝選択中ユニットのチーム（なければ未完了の先のチーム）が準備完了
-        if (phase == Phase.Orders && !choosingAction && kb != null
+        if (phase == Phase.Orders && !choosingAction && orderingDrone == null
+            && kb != null
             && (kb.enterKey.wasPressedThisFrame
                 || kb.numpadEnterKey.wasPressedThisFrame))
         {
@@ -164,13 +303,29 @@ public class GameController : MonoBehaviour
         Unit clicked = FindUnitAt(cell);
 
         // 【解決中】一時停止中：種類に応じたクリック処理
-        if (phase == Phase.Resolution && currentAttacker != null)
+        if (phase == Phase.Resolution
+            && (currentAttacker != null || currentDrone != null))
         {
             HandleResolutionClick(clicked, cell);
             return;
         }
 
         if (phase == Phase.Resolution) return;
+
+        // 【指示入力】ドローンの移動先選択中
+        if (phase == Phase.Orders && orderingDrone != null)
+        {
+            if (movable.Contains(cell))
+            {
+                droneOrders[orderingDrone] = cell;
+                Debug.Log($"{DroneName(orderingDrone)} の移動先を {cell} に指示した");
+                int team = orderingDrone.controller.team;
+                orderingDrone = null;
+                ClearHighlights();
+                CheckAutoReady(team);
+            }
+            return; // 範囲外のクリックは無視して待ち続ける
+        }
 
         // 【準備行動の選択待ち】空マスクリック＝防御で確定
         if (choosingAction)
@@ -220,8 +375,18 @@ public class GameController : MonoBehaviour
     // 解決中の一時停止中のクリック処理（種類別）
     void HandleResolutionClick(Unit clicked, Vector2Int cell)
     {
+        // ドローンの攻撃対象の選択中
+        if (currentDrone != null)
+        {
+            HandleDroneClick(clicked, cell);
+            return;
+        }
+
         switch (pauseKind)
         {
+            case PauseKind.HackChoice:
+                return; // 数字キー専用（Update側で処理）。クリックは無視
+
             case PauseKind.KaedeMove:
                 // ハイライト内の空マスへ追加移動、自分をクリックで移動しない
                 if (clicked == currentAttacker)
@@ -240,21 +405,47 @@ public class GameController : MonoBehaviour
                 return; // 範囲外のクリックは無視して待ち続ける
 
             case PauseKind.KaedeAttack:
-                if (clicked != null && clicked.team != currentAttacker.team
-                    && attackable.Contains(cell))
+                DroneInfo kaedeDrone = FindDroneAt(cell);
+                if (clicked == null && kaedeDrone != null
+                    && kaedeDrone.team != currentAttacker.team
+                    && attackable.Contains(cell)
+                    && CanTargetDrone(currentAttacker, kaedeDrone))
                 {
-                    Attack(currentAttacker, clicked);
+                    AttackDrone(currentAttacker, kaedeDrone);
                     ultAttacksLeft--;
-                    if (!gameOver
-                        && currentAttacker.gameObject.activeSelf
+                    if (!gameOver && currentAttacker.gameObject.activeSelf
                         && ultAttacksLeft > 0
-                        && AnyEnemyInRange(currentAttacker, currentAttacker.cell))
+                        && AnyTargetableEnemy(currentAttacker, currentAttacker.cell))
                     {
                         ShowAttackRangeFrom(currentAttacker, currentAttacker.cell,
                             new Color(1f, 0f, 0f, 0.35f));
                         Debug.Log($"疾風斬：もう1回攻撃できます（残り {ultAttacksLeft} 回）。対象を選んでください");
                         return; // 一時停止を継続
                     }
+                    EndAttackSelection();
+                    return;
+                }
+                if (clicked != null && clicked.team != currentAttacker.team
+                    && attackable.Contains(cell)
+                    && CanSee(currentAttacker, clicked))
+                {
+                    Attack(currentAttacker, clicked);
+                    ultAttacksLeft--;
+                    if (!gameOver
+                        && currentAttacker.gameObject.activeSelf
+                        && ultAttacksLeft > 0
+                        && AnyTargetableEnemy(currentAttacker, currentAttacker.cell))
+                    {
+                        ShowAttackRangeFrom(currentAttacker, currentAttacker.cell,
+                            new Color(1f, 0f, 0f, 0.35f));
+                        Debug.Log($"疾風斬：もう1回攻撃できます（残り {ultAttacksLeft} 回）。対象を選んでください");
+                        return; // 一時停止を継続
+                    }
+                }
+                else if (clicked != null && clicked.team != currentAttacker.team
+                         && attackable.Contains(cell))
+                {
+                    Debug.Log($"{clicked.displayName} は目視できていないため攻撃できない");
                 }
                 else
                 {
@@ -264,10 +455,26 @@ public class GameController : MonoBehaviour
                 return;
 
             case PauseKind.YukiSnipe:
+                DroneInfo snipeDrone = FindDroneAt(cell);
+                if (clicked == null && snipeDrone != null
+                    && snipeDrone.team != currentAttacker.team
+                    && attackable.Contains(cell)
+                    && CanTargetDrone(currentAttacker, snipeDrone))
+                {
+                    AttackDrone(currentAttacker, snipeDrone, true, 1.5f);
+                    EndAttackSelection();
+                    return;
+                }
                 if (clicked != null && clicked.team != currentAttacker.team
-                    && attackable.Contains(cell))
+                    && attackable.Contains(cell)
+                    && CanSee(currentAttacker, clicked))
                 {
                     Attack(currentAttacker, clicked, true, 1.5f);
+                }
+                else if (clicked != null && clicked.team != currentAttacker.team
+                         && attackable.Contains(cell))
+                {
+                    Debug.Log($"{clicked.displayName} は目視できていないため撃てない（EXは消費済み）");
                 }
                 else
                 {
@@ -288,6 +495,70 @@ public class GameController : MonoBehaviour
                 EndAttackSelection();
                 return;
 
+            case PauseKind.TrapPlace:
+                // 自分の周囲1マスの通行可能なマスに設置
+                if (movable.Contains(cell))
+                {
+                    PlaceTrap(currentAttacker, cell, pendingTrapType);
+                }
+                else
+                {
+                    Debug.Log("そのマスには設置できないため、トラップを設置しなかった");
+                }
+                EndAttackSelection();
+                return;
+
+            case PauseKind.SmokePlace:
+                // 射程4以内のマスを中心に十字5マスの煙幕
+                if (attackable.Contains(cell))
+                {
+                    PlaceSmoke(currentAttacker, cell);
+                }
+                else
+                {
+                    Debug.Log($"{currentAttacker.displayName} はスモークグレネードを使わなかった");
+                }
+                EndAttackSelection();
+                return;
+
+            case PauseKind.HackTarget:
+                // 半径3マス以内の敵ドローンをクリックで選ぶ
+                DroneInfo hackTarget = FindDroneAt(cell);
+                if (hackTarget != null && hackTarget.team != currentAttacker.team
+                    && Vector2.Distance(currentAttacker.cell, hackTarget.cell) <= 3f)
+                {
+                    if (pendingUltHack)
+                    {
+                        // オーバーライド：種別は権限取得で固定、そのまま解決
+                        ResolveHack(currentAttacker, hackTarget);
+                        pendingUltHack = false;
+                        EndAttackSelection();
+                        return;
+                    }
+                    // 対象が決まったら、次に種別を選ぶ
+                    pendingHackTarget = hackTarget;
+                    BeginPause(currentAttacker, PauseKind.HackChoice);
+                    Debug.Log($"対象は {DroneName(hackTarget)}。ハッキングの種別を数字キーで選んでください [1]機能停止（成功率80%） [2]権限取得（50%） [3]爆破（50%）");
+                    return;
+                }
+                Debug.Log($"{currentAttacker.displayName} はハッキング対象を選ばなかった");
+                pendingUltHack = false;
+                EndAttackSelection();
+                return;
+
+            case PauseKind.DroneDummyTarget:
+                // ダミードローンが姿を借りる味方をクリックで選ぶ
+                if (clicked != null && clicked.team == currentAttacker.team)
+                {
+                    CreateDrone(currentAttacker, DroneType.Dummy, clicked);
+                }
+                else
+                {
+                    Debug.Log($"{currentAttacker.displayName} はダミードローンを作成しなかった");
+                }
+                EndAttackSelection();
+                return;
+
             case PauseKind.Grenade:
                 // 地点指定：射程内のマスをクリックで着弾（ユニットの有無は問わない）
                 if (attackable.Contains(cell))
@@ -303,10 +574,26 @@ public class GameController : MonoBehaviour
                 return;
 
             default: // PauseKind.Attack（通常攻撃の対象選択）
+                DroneInfo droneHit = FindDroneAt(cell);
+                if (clicked == null && droneHit != null
+                    && droneHit.team != currentAttacker.team
+                    && attackable.Contains(cell)
+                    && CanTargetDrone(currentAttacker, droneHit))
+                {
+                    AttackDrone(currentAttacker, droneHit);
+                    EndAttackSelection();
+                    return;
+                }
                 if (clicked != null && clicked.team != currentAttacker.team
-                    && attackable.Contains(cell))
+                    && attackable.Contains(cell)
+                    && CanSee(currentAttacker, clicked))
                 {
                     Attack(currentAttacker, clicked);
+                }
+                else if (clicked != null && clicked.team != currentAttacker.team
+                         && attackable.Contains(cell))
+                {
+                    Debug.Log($"{clicked.displayName} は目視できていないため攻撃できない");
                 }
                 else
                 {
@@ -320,12 +607,14 @@ public class GameController : MonoBehaviour
     // 画面右の準備完了ボタンから呼ばれる
     public void ReadyTeam1Button()
     {
-        if (phase == Phase.Orders && !choosingAction) ReadyTeam(1);
+        if (phase == Phase.Orders && !choosingAction && orderingDrone == null)
+            ReadyTeam(1);
     }
 
     public void ReadyTeam2Button()
     {
-        if (phase == Phase.Orders && !choosingAction) ReadyTeam(2);
+        if (phase == Phase.Orders && !choosingAction && orderingDrone == null)
+            ReadyTeam(2);
     }
 
     // 準備完了：そのチームの指示をロックし、両チームそろえば解決開始
@@ -395,8 +684,48 @@ public class GameController : MonoBehaviour
     // ボタンから呼ばれる選択肢
     public void ChooseAttack() { if (choosingAction) FinalizeOrder(PreparedAction.Attack); }
     public void ChooseDefend() { if (choosingAction) FinalizeOrder(PreparedAction.Defend); }
-    public void ChooseSpecial() { if (choosingAction) FinalizeOrder(PreparedAction.Special); }
+    public void ChooseSpecial() { if (choosingAction) BeginSpecialChoice(); }
     public void ChooseUlt() { if (choosingAction) FinalizeOrder(PreparedAction.Ult); }
+
+    // 特殊装備準備：使う装備を指示の時点で選ぶ
+    void BeginSpecialChoice()
+    {
+        var options = BuildSpecialOptions(selected);
+        if (options.Count == 0)
+        {
+            Debug.Log($"{selected.displayName} はいま使用できる特殊装備がないため、特殊装備準備を選べません。別の準備行動を選んでください");
+            return; // 確定せず、行動選択モードのまま
+        }
+        if (options.Count == 1)
+        {
+            FinalizeSpecialOrder(options[0]);
+            return;
+        }
+        choosingSpecial = true;
+        pendingSpecialOptions = options;
+        var parts = new List<string>();
+        for (int i = 0; i < options.Count; i++)
+            parts.Add($"[{i + 1}]{options[i]}");
+        Debug.Log($"{selected.displayName} の特殊装備：使うものを数字キーで選んでください {string.Join(" ", parts)}");
+    }
+
+    // 特殊装備を決めて指示を確定する
+    // （ドローンは、さらに種類の選択に進む。ハッキングの種別は解決時に選ぶ）
+    void FinalizeSpecialOrder(string choice)
+    {
+        if (choice == "ドローンユニット")
+        {
+            choosingSpecial = false;
+            choosingDroneType = true;
+            pendingSpecialOptions = new List<string>
+                { "ダメージドローン", "センサードローン", "ビーコン弾ドローン", "ダミードローン" };
+            Debug.Log($"{selected.displayName} のドローン：作成する種類を数字キーで選んでください [1]ダメージ [2]センサー [3]ビーコン弾 [4]ダミー");
+            return;
+        }
+        Order o = GetOrder(selected);
+        o.specialChoice = choice;
+        FinalizeOrder(PreparedAction.Special);
+    }
 
     void FinalizeOrder(PreparedAction action)
     {
@@ -407,6 +736,10 @@ public class GameController : MonoBehaviour
             return; // 確定せず、行動選択モードのまま
         }
 
+        choosingSpecial = false;
+        choosingDroneType = false;
+        pendingSpecialOptions = new List<string>();
+
         Unit unit = selected;
         Order o = GetOrder(unit);
         o.prepared = action;
@@ -415,7 +748,7 @@ public class GameController : MonoBehaviour
         {
             PreparedAction.Attack => "攻撃準備",
             PreparedAction.Defend => "防御準備",
-            PreparedAction.Special => "特殊装備の使用準備",
+            PreparedAction.Special => $"特殊装備の使用準備（{o.specialChoice}）",
             PreparedAction.Ult => "ULT準備",
             _ => "行動なし",
         };
@@ -424,11 +757,26 @@ public class GameController : MonoBehaviour
         if (actionPanel != null) actionPanel.SetActive(false);
         Select(null);
 
-        // そのチームの全ユニットの指示がそろったら自動で準備完了
-        if (AllUnitsOrdered(unit.team))
+        // ドローンを運用している場合は、続けてドローンの指示を受ける
+        DroneInfo drone = FindDroneControlledBy(unit);
+        if (drone != null && DroneUsable(drone))
         {
-            Debug.Log($"チーム{unit.team} の全ユニットの指示が完了したため、自動で準備完了にします");
-            ReadyTeam(unit.team);
+            orderingDrone = drone;
+            ShowDroneRange(drone);
+            Debug.Log($"{unit.displayName} のドローン（{DroneName(drone)}）の指示：移動先を選んでください（ドローンのマスをクリックで移動しない）");
+            return;
+        }
+
+        CheckAutoReady(unit.team);
+    }
+
+    // そのチームの全ユニットの指示がそろったら自動で準備完了
+    void CheckAutoReady(int team)
+    {
+        if (AllUnitsOrdered(team))
+        {
+            Debug.Log($"チーム{team} の全ユニットの指示が完了したため、自動で準備完了にします");
+            ReadyTeam(team);
         }
     }
 
@@ -452,6 +800,8 @@ public class GameController : MonoBehaviour
     {
         Select(null);
         choosingAction = false;
+        orderingDrone = null;
+        ClearHighlights();
         if (actionPanel != null) actionPanel.SetActive(false);
 
         phase = Phase.Resolution;
@@ -524,13 +874,16 @@ public class GameController : MonoBehaviour
             if (o != null && o.moveCell.HasValue && o.moveCell.Value != u.cell)
             {
                 Vector2Int dest = o.moveCell.Value;
-                if ((terrain == null || terrain.IsPassable(dest))
-                    && FindUnitAt(dest) == null)
+                // 到着先が塞がれていたら、来た方向の手前の空きマスで止まる
+                Vector2Int stop = FindStopCell(u.cell, dest, false, null);
+                if (stop != u.cell)
                 {
-                    u.cell = dest;
+                    u.cell = stop;
                     u.SnapToCell();
                     u.movedThisTurn = true;
-                    Debug.Log($"{u.displayName} は {dest} へ移動");
+                    Debug.Log(stop == dest
+                        ? $"{u.displayName} は {dest} へ移動"
+                        : $"{u.displayName} は {stop} へ移動（到着先 {dest} が塞がれていたため手前で停止）");
 
                     // EXマス：移動して止まるとEX+1（上限2。居座りでは増えない）
                     if (terrain != null
@@ -559,11 +912,30 @@ public class GameController : MonoBehaviour
                         if (curedPoison) u.poisonSourceTeam = 0;
                         Debug.Log($"{u.displayName} はヒールポイントで回復：HP {beforeHp} → {u.hp}{(curedPoison ? "、毒を解除" : "")}（このヒールポイントは消滅）");
                     }
+
+                    // トラップ：敵の罠の半径1マス以内に入ったら自動発動
+                    CheckTraps(u);
                 }
                 else
                 {
-                    Debug.Log($"{u.displayName} の移動は失敗（到着先が塞がれている）");
+                    Debug.Log($"{u.displayName} の移動は失敗（到着先が塞がれていて進めなかった）");
                 }
+            }
+
+            // トラップで倒れた場合は行動できない
+            if (!u.gameObject.activeSelf)
+            {
+                resolveIndex++;
+                continue;
+            }
+
+            // トラップで行動不能になった場合は、このターンの行動を失う
+            if (u.stunTurns > 0)
+            {
+                u.stunTurns--;
+                Debug.Log($"{u.displayName} は行動不能で、このターンの行動ができない");
+                resolveIndex++;
+                continue;
             }
 
             // ② 準備行動を試みる
@@ -573,27 +945,21 @@ public class GameController : MonoBehaviour
                 Debug.Log(u.shieldBlockRate > 0
                     ? $"{u.displayName} は防御態勢（ブロック率 {u.shieldBlockRate}%）"
                     : $"{u.displayName} は防御態勢（シールドなし：ブロック不可）");
+                if (ResolveDroneTurn(u)) return;
                 resolveIndex++;
                 continue;
             }
             if (action == PreparedAction.Special)
             {
-                var names = new List<string>();
-                if (u.data != null && u.data.equipment != null)
-                {
-                    foreach (var item in u.data.equipment)
-                    {
-                        if (item != null && item.kind == ItemKind.Special)
-                            names.Add(item.itemName);
-                    }
-                }
-                Debug.Log($"{u.displayName} の特殊装備使用：{(names.Count > 0 ? string.Join("・", names) : "（装備なし）")} ※効果は今後のステップで実装");
+                if (ResolveSpecialFromOrder(u, o)) return; // 一時停止（トラップ／スモークの設置先選択）
+                if (ResolveDroneTurn(u)) return;
                 resolveIndex++;
                 continue;
             }
             if (action == PreparedAction.Ult)
             {
                 if (ActivateUlt(u)) return; // 一時停止（対象選択など）
+                if (ResolveDroneTurn(u)) return;
                 resolveIndex++;
                 continue;
             }
@@ -613,23 +979,26 @@ public class GameController : MonoBehaviour
                         return;
                     }
                     Debug.Log($"{u.displayName} の攻撃準備：爆風の届く範囲に敵がおらずスキップ");
+                    if (ResolveDroneTurn(u)) return;
                     resolveIndex++;
                     continue;
                 }
-                if (AnyEnemyInRange(u, u.cell))
+                if (AnyTargetableEnemy(u, u.cell))
                 {
                     // 対象選択のため一時停止
                     BeginPause(u, PauseKind.Attack);
                     ShowAttackRangeFrom(u, u.cell,
                         new Color(1f, 0f, 0f, 0.35f));
-                    Debug.Log($"{u.displayName} の攻撃：対象を選んでください（攻撃しない場合は空マスかSpace）");
+                    Debug.Log($"{u.displayName} の攻撃：対象を選んでください（攻撃可能な対象：{TargetableNames(u)}）");
                     return;
                 }
-                Debug.Log($"{u.displayName} の攻撃準備：射程内に敵がおらずスキップ");
+                Debug.Log($"{u.displayName} の攻撃準備：射程内に攻撃可能な敵がおらずスキップ（目視できていない敵は攻撃できない）");
+                if (ResolveDroneTurn(u)) return;
                 resolveIndex++;
                 continue;
             }
 
+            if (ResolveDroneTurn(u)) return;
             resolveIndex++; // 行動なし（指示なしユニット）
         }
 
@@ -639,6 +1008,13 @@ public class GameController : MonoBehaviour
     // 一時停止の開始（ユニットを黄色くハイライト）
     void BeginPause(Unit u, PauseKind kind)
     {
+        if (currentAttacker == u)
+        {
+            // すでにハイライト中なら、一時停止の種類だけ切り替える
+            // （特殊装備の選択 → 設置先の選択、などの連続した一時停止用）
+            pauseKind = kind;
+            return;
+        }
         currentAttacker = u;
         pauseKind = kind;
         var sr = u.GetComponent<SpriteRenderer>();
@@ -650,6 +1026,7 @@ public class GameController : MonoBehaviour
 
     void EndAttackSelection()
     {
+        Unit finished = currentAttacker;
         if (currentAttacker != null)
         {
             var sr = currentAttacker.GetComponent<SpriteRenderer>();
@@ -659,7 +1036,20 @@ public class GameController : MonoBehaviour
         }
         pauseKind = PauseKind.None;
         ultAttacksLeft = 0;
+        pendingSpecialOptions = new List<string>();
+        pendingUltHack = false;
+        pendingHackTarget = null;
         ClearHighlights();
+        // 終わったユニットがドローンを運用していれば、続けてドローンを解決する
+        if (finished != null && ResolveDroneTurn(finished)) return;
+        resolveIndex++;
+        if (!gameOver) AdvanceResolution();
+    }
+
+    // ドローンの一時停止が終わったときに、操作者のスロットを終える
+    void CompleteSlot(Unit controller)
+    {
+        if (controller != null && ResolveDroneTurn(controller)) return;
         resolveIndex++;
         if (!gameOver) AdvanceResolution();
     }
@@ -668,7 +1058,7 @@ public class GameController : MonoBehaviour
     void StartKaedeAttacks()
     {
         ultAttacksLeft = 2;
-        if (AnyEnemyInRange(currentAttacker, currentAttacker.cell))
+        if (AnyTargetableEnemy(currentAttacker, currentAttacker.cell))
         {
             pauseKind = PauseKind.KaedeAttack;
             ShowAttackRangeFrom(currentAttacker, currentAttacker.cell,
@@ -714,7 +1104,7 @@ public class GameController : MonoBehaviour
                 return true;
 
             case "ユキ": // 必中狙撃：必中・ダメージ+50%の射撃をこの行動で撃つ
-                if (!AnyEnemyInRange(u, u.cell))
+                if (!AnyTargetableEnemy(u, u.cell))
                 {
                     Debug.Log($"{u.displayName} のULT「{ultName}」：射程内に敵がおらず不発（EXは消費しない）");
                     return false;
@@ -724,7 +1114,7 @@ public class GameController : MonoBehaviour
                 BeginPause(u, PauseKind.YukiSnipe);
                 ShowAttackRangeFrom(u, u.cell,
                     new Color(1f, 0f, 0f, 0.35f));
-                Debug.Log("狙撃する対象を選んでください");
+                Debug.Log($"狙撃する対象を選んでください（攻撃可能な対象：{TargetableNames(u)}）");
                 return true;
 
             case "サクラ": // 緊急治療：味方1人を回復30＋状態異常全解除（射程なし）
@@ -770,8 +1160,39 @@ public class GameController : MonoBehaviour
                 Debug.Log("着弾させるマスを選んでください");
                 return true;
 
-            default: // ノイ・ミコトは依存システムのステップで実装
-                Debug.Log($"{u.displayName} のULT「{ultName}」の効果は後続ステップで実装（EXは消費しない）");
+            case "ノイ": // ドローンラッシュ：即作成、または既存ドローンが2回行動
+                DroneInfo own = FindDroneControlledBy(u);
+                if (own != null && DroneUsable(own))
+                {
+                    u.exPoints--;
+                    own.bonusActions += 1;
+                    Debug.Log($"{u.displayName} のULT「{ultName}」発動！（EX {u.exPoints}/{Unit.MaxEx}）このターン、ドローンが2回行動できる");
+                    return false;
+                }
+                DroneInfo created = CreateDrone(u, DroneType.Damage, null);
+                if (created == null)
+                {
+                    Debug.Log($"{u.displayName} のULT「{ultName}」：隣接マスに空きがなくドローンを作成できなかった（EXは消費しない）");
+                    return false;
+                }
+                u.exPoints--;
+                Debug.Log($"{u.displayName} のULT「{ultName}」発動！（EX {u.exPoints}/{Unit.MaxEx}）ダメージドローンを即座に作成した（このターンは指示がないため待機）");
+                return false;
+
+            case "ミコト": // オーバーライド：敵ドローン・設置物1つを確実に権限取得
+                if (!AnyEnemyDroneWithin(u.team, u.cell, 3))
+                {
+                    Debug.Log($"{u.displayName} のULT「{ultName}」：半径3マス以内に敵ドローンがおらず不発（EXは消費しない）");
+                    return false;
+                }
+                u.exPoints--;
+                pendingUltHack = true;
+                Debug.Log($"{u.displayName} のULT「{ultName}」発動！（EX {u.exPoints}/{Unit.MaxEx}）権限取得する敵ドローンを選んでください");
+                BeginPause(u, PauseKind.HackTarget);
+                return true;
+
+            default: // 全キャラのULTが実装済み（ここに来るのは想定外）
+                Debug.Log($"{u.displayName} のULT「{ultName}」の効果は未実装（EXは消費しない）");
                 return false;
         }
     }
@@ -789,6 +1210,159 @@ public class GameController : MonoBehaviour
         Debug.Log($"{healer.displayName} のULT「緊急治療」：{target.displayName} のHP {before} → {target.hp}{(cured ? "、状態異常をすべて解除" : "")}");
     }
 
+    // そのユニットが、いま使用できる特殊装備の一覧（ビーコン時は切除も含む）
+    List<string> BuildSpecialOptions(Unit u)
+    {
+        var options = new List<string>();
+        if (u.beaconed) options.Add("切除");
+        if (u.data != null && u.data.equipment != null)
+        {
+            foreach (var item in u.data.equipment)
+            {
+                if (item == null || item.kind != ItemKind.Special) continue;
+                if (options.Contains(item.itemName)) continue;
+                if (!IsSpecialUsable(u, item.itemName)) continue;
+                options.Add(item.itemName);
+            }
+        }
+        return options;
+    }
+
+    // 解決時：指示の時点で選んだ特殊装備を実行する（一時停止したら true）
+    bool ResolveSpecialFromOrder(Unit u, Order o)
+    {
+        string choice = o?.specialChoice;
+        if (choice == null)
+        {
+            // 指示時点で選ばれていない場合（通常は起きない）
+            var options = BuildSpecialOptions(u);
+            if (options.Count == 0)
+            {
+                Debug.Log($"{u.displayName} の特殊装備使用：いま使用できる特殊装備がない");
+                return false;
+            }
+            choice = options[0];
+        }
+        pendingDroneType = o?.droneType ?? DroneType.Damage;
+        return ExecuteSpecial(u, choice);
+    }
+
+    // その特殊装備が、いま使える状態かどうか
+    bool IsSpecialUsable(Unit u, string itemName)
+    {
+        switch (itemName)
+        {
+            case "光学迷彩": return !u.camouflaged; // 発動中は選べない
+            case "センサーユニット": return !sensorUsers.Contains(u); // 展開中は選べない
+            case "トラップユニット": return TrapUsesLeft(u) > 0;
+            case "スモークグレネード": return SmokeUsesLeft(u) > 0;
+            case "ドローンユニット": return FindDroneControlledBy(u) == null; // 運用中は作成できない
+            case "ハッキングユニット":
+                // 移動先（未定なら現在地）から半径3マス以内に敵ドローンがいる場合のみ
+                var o = GetOrder(u);
+                Vector2Int from = o.moveCell ?? u.cell;
+                return AnyEnemyDroneWithin(u.team, from, 3);
+            default: return true; // メディカルキット等（効果は未実装）
+        }
+    }
+
+    // 選ばれた特殊装備（または切除）を実行する。設置先の選択で一時停止したら true
+    bool ExecuteSpecial(Unit u, string choice)
+    {
+        switch (choice)
+        {
+            case "切除": // ビーコン切除：自傷5ダメージでビーコンを外す
+                if (!u.beaconed)
+                {
+                    Debug.Log($"{u.displayName} の切除：ビーコンはすでに外れているため、何もしなかった");
+                    return false;
+                }
+                u.beaconed = false;
+                u.hp -= 5;
+                Debug.Log($"{u.displayName} はビーコンを切除した（自傷5ダメージ、残りHP {Mathf.Max(u.hp, 0)}）");
+                if (u.hp <= 0)
+                {
+                    Debug.Log($"{u.displayName} は切除のダメージで倒れた（この撃破では得点は入らない）");
+                    u.gameObject.SetActive(false);
+                    CheckWin();
+                }
+                return false;
+
+            case "光学迷彩": // 有効化（攻撃する・被弾すると解除される）
+                if (u.camouflaged)
+                {
+                    Debug.Log($"{u.displayName} の光学迷彩：すでに有効化されているため、何もしなかった");
+                    return false;
+                }
+                u.camouflaged = true;
+                Debug.Log($"{u.displayName} は光学迷彩を有効化した（敵から目視不可になる。攻撃・被弾で解除）");
+                return false;
+
+            case "センサーユニット": // 使用者を中心とするセンサー範囲を展開
+                if (sensorUsers.Contains(u))
+                {
+                    Debug.Log($"{u.displayName} のセンサーユニット：すでに展開されているため、何もしなかった");
+                    return false;
+                }
+                sensorUsers.Add(u);
+                Debug.Log($"{u.displayName} はセンサーユニットを展開した（半径 {4 + u.search / 25} マス以内の敵を把握し、迷彩・ブッシュも看破する）");
+                return false;
+
+            case "トラップユニット": // 設置先と種類を選んで設置（1試合3回まで）
+                if (TrapUsesLeft(u) <= 0)
+                {
+                    Debug.Log($"{u.displayName} のトラップユニット：使用回数を使い切っているため、何もしなかった");
+                    return false;
+                }
+                pendingTrapType = TrapType.Damage;
+                BeginPause(u, PauseKind.TrapPlace);
+                ShowTrapRange(u);
+                Debug.Log($"{u.displayName} のトラップ設置：設置するマスを選んでください（種類はキーで切替 [1]ダメージ [2]行動不能 [3]ビーコン、現在：ダメージ／残り {TrapUsesLeft(u)} 回）");
+                return true;
+
+            case "スモークグレネード": // 中心マスを選んで十字5マスの煙幕（1試合3回まで）
+                if (SmokeUsesLeft(u) <= 0)
+                {
+                    Debug.Log($"{u.displayName} のスモークグレネード：使用回数を使い切っているため、何もしなかった");
+                    return false;
+                }
+                BeginPause(u, PauseKind.SmokePlace);
+                ShowRadiusFrom(u.cell, 4, new Color(0.55f, 0.55f, 0.6f, 0.35f));
+                Debug.Log($"{u.displayName} のスモークグレネード：煙幕の中心マスを選んでください（射程4、残り {SmokeUsesLeft(u)} 回）");
+                return true;
+
+            case "ドローンユニット": // 作成に1ターン。種類は指示時点で選択済み
+                if (FindDroneControlledBy(u) != null)
+                {
+                    Debug.Log($"{u.displayName} のドローン：すでにドローンを運用中のため作成できない");
+                    return false;
+                }
+                if (pendingDroneType == DroneType.Dummy)
+                {
+                    BeginPause(u, PauseKind.DroneDummyTarget);
+                    Debug.Log($"{u.displayName} のダミードローン：姿を借りる味方をクリックしてください");
+                    return true;
+                }
+                CreateDrone(u, pendingDroneType, null);
+                return false;
+
+            case "ハッキングユニット": // 半径3マス以内の敵ドローンを狙う
+                if (!AnyEnemyDroneWithin(u.team, u.cell, 3))
+                {
+                    Debug.Log($"{u.displayName} のハッキング：範囲内に敵ドローンがおらず空振り");
+                    return false;
+                }
+                pendingUltHack = false;
+                BeginPause(u, PauseKind.HackTarget);
+                Debug.Log($"{u.displayName} のハッキング：対象のドローンを選んでください（選んだ後に種別を決めます）");
+                return true;
+
+            default:
+                Debug.Log($"{u.displayName} の特殊装備使用：{choice} ※この装備の効果は未実装");
+                return false;
+        }
+    }
+
     // 鉄壁：対象の半径2マス以内に、攻撃を引き受けられる味方がいるか
     Unit FindGuardFor(Unit target)
     {
@@ -804,6 +1378,18 @@ public class GameController : MonoBehaviour
 
     void FinishRound()
     {
+        // ターン終了処理：スモークの持続ターン消費（2回のターン終了で晴れる）
+        for (int i = smokes.Count - 1; i >= 0; i--)
+        {
+            smokes[i].remainingTurnEnds--;
+            if (smokes[i].remainingTurnEnds <= 0)
+            {
+                foreach (var v in smokes[i].visuals) Destroy(v);
+                smokes.RemoveAt(i);
+                Debug.Log("スモークが晴れた");
+            }
+        }
+
         // ターン終了処理：毒ダメージ
         ApplyPoisonDamage();
         if (gameOver) { RefreshReadyUI(); return; }
@@ -812,6 +1398,23 @@ public class GameController : MonoBehaviour
         ApplyNexusScoring();
 
         orders.Clear();
+        droneOrders.Clear();
+        firstHitBy.Clear();
+        linkageUsedTeams.Clear();
+
+        // ドローン：操作者を失ったものは機能停止する（権限取得で再起動できる）
+        foreach (var d in drones)
+        {
+            d.bonusActions = 0;
+            if (!d.disabled
+                && (d.controller == null || !d.controller.gameObject.activeSelf))
+            {
+                d.disabled = true;
+                SetDroneVisualColor(d);
+                Debug.Log($"{DroneName(d)} は操作者を失い、機能停止した");
+            }
+        }
+
         teamReady[1] = false;
         teamReady[2] = false;
         orderTimer = orderTimeLimit;
@@ -820,6 +1423,7 @@ public class GameController : MonoBehaviour
             u.movedThisTurn = false;
             u.defending = false;
             u.ultGuarding = false;
+            u.exposed = false;
         }
         turnNumber++;
         if (turnNumber > MaxTurns)
@@ -907,9 +1511,767 @@ public class GameController : MonoBehaviour
         return false;
     }
 
+    // ---- ドローンとハッキング（7-3） ----
+
+    string DroneName(DroneInfo d)
+    {
+        if (d.type == DroneType.Dummy && d.dummyTarget != null)
+            return d.dummyTarget.displayName;
+        return DroneTypeLabel(d.type);
+    }
+
+    string DroneTypeLabel(DroneType t)
+    {
+        switch (t)
+        {
+            case DroneType.Damage: return "ダメージドローン";
+            case DroneType.Sensor: return "センサードローン";
+            case DroneType.Beacon: return "ビーコン弾ドローン";
+            default: return "ダミードローン";
+        }
+    }
+
+    string HackTypeLabel(int hackType)
+    {
+        switch (hackType)
+        {
+            case 1: return "機能停止（成功率80%）";
+            case 2: return "権限取得（成功率50%）";
+            default: return "爆破（成功率50%）";
+        }
+    }
+
+    DroneInfo FindDroneAt(Vector2Int cell)
+    {
+        foreach (var d in drones)
+            if (d.cell == cell) return d;
+        return null;
+    }
+
+    DroneInfo FindDroneControlledBy(Unit u)
+    {
+        foreach (var d in drones)
+            if (d.controller == u) return d;
+        return null;
+    }
+
+    // ドローンが行動できる状態か（機能停止でなく、操作者が生きている）
+    bool DroneUsable(DroneInfo d)
+    {
+        return d != null && !d.disabled
+            && d.controller != null && d.controller.gameObject.activeSelf;
+    }
+
+    bool AnyEnemyDroneWithin(int team, Vector2Int origin, float dist)
+    {
+        foreach (var d in drones)
+        {
+            if (d.team == team) continue;
+            if (Vector2.Distance(origin, d.cell) <= dist) return true;
+        }
+        return false;
+    }
+
+    void SetDroneVisualColor(DroneInfo d)
+    {
+        if (d.visual == null) return;
+        var sr = d.visual.GetComponent<SpriteRenderer>();
+        sr.color = d.disabled
+            ? new Color(0.4f, 0.4f, 0.4f, 0.6f) : d.baseColor;
+    }
+
+    // ドローンを作成する（操作者の隣接マスに出現。置けなければ null）
+    DroneInfo CreateDrone(Unit controller, DroneType type, Unit dummyTarget)
+    {
+        Vector2Int? spawn = null;
+        var dirs = new Vector2Int[]
+        {
+            new(1, 0), new(-1, 0), new(0, 1), new(0, -1),
+            new(1, 1), new(1, -1), new(-1, 1), new(-1, -1)
+        };
+        foreach (var dir in dirs)
+        {
+            Vector2Int c = controller.cell + dir;
+            if (!Inside(c)) continue;
+            if (terrain != null && !terrain.IsPassable(c)) continue;
+            if (FindUnitAt(c) != null) continue;
+            if (FindDroneAt(c) != null) continue;
+            spawn = c;
+            break;
+        }
+        if (spawn == null) return null;
+
+        var visual = Instantiate(highlightPrefab);
+        visual.transform.position
+            = new Vector3(spawn.Value.x + 0.5f, spawn.Value.y + 0.5f, 0);
+        visual.transform.localScale = Vector3.one * 0.7f;
+        visual.GetComponent<SpriteRenderer>().sortingOrder = 1;
+
+        var d = new DroneInfo
+        {
+            owner = controller,
+            controller = controller,
+            team = controller.team,
+            type = type,
+            cell = spawn.Value,
+            hp = 10,
+            visual = visual,
+            dummyTarget = dummyTarget,
+            baseAttack = controller.attack,
+            searchBonus = controller.search / 25
+        };
+        d.baseColor = type == DroneType.Dummy && dummyTarget != null
+            ? dummyTarget.GetComponent<SpriteRenderer>().color
+            : controller.team == 1
+                ? new Color(0.35f, 0.65f, 1f, 0.9f)
+                : new Color(1f, 0.5f, 0.35f, 0.9f);
+        SetDroneVisualColor(d);
+        drones.Add(d);
+        Debug.Log($"{controller.displayName} は{DroneTypeLabel(type)}を作成した（{spawn.Value} に出現、HP10）");
+        return d;
+    }
+
+    void DestroyDrone(DroneInfo d)
+    {
+        drones.Remove(d);
+        droneOrders.Remove(d);
+        if (d.visual != null) Destroy(d.visual);
+        Debug.Log($"{DroneName(d)} は撃破された（ドローンの撃破ではポイントは入らない）");
+    }
+
+    void DamageDrone(DroneInfo d, int amount)
+    {
+        d.hp -= amount;
+        Debug.Log($"{DroneName(d)} に {amount} ダメージ（残りHP {Mathf.Max(d.hp, 0)}）");
+        if (d.hp <= 0) DestroyDrone(d);
+    }
+
+    // ドローンの移動範囲を表示（4マス、ユニットや他のドローンのいるマスは除く）
+    void ShowDroneRange(DroneInfo d)
+    {
+        ClearHighlights();
+        movable.Clear();
+        for (int dx = -4; dx <= 4; dx++)
+        {
+            for (int dy = -4; dy <= 4; dy++)
+            {
+                Vector2Int c = d.cell + new Vector2Int(dx, dy);
+                if (!Inside(c)) continue;
+                if (Vector2.Distance(d.cell, c) > 4f) continue;
+                if (c != d.cell)
+                {
+                    if (terrain != null && !terrain.IsPassable(c)) continue;
+                    if (FindUnitAt(c) != null) continue;
+                    if (FindDroneAt(c) != null) continue;
+                }
+                movable.Add(c);
+                AddHighlight(c, new Color(0.4f, 0.8f, 1f, 0.3f));
+            }
+        }
+    }
+
+    // ユニットからドローンを狙えるか（射線が通り、スモークの中にいない）
+    bool CanTargetDrone(Unit attacker, DroneInfo d)
+    {
+        if (IsSmokeCell(d.cell)) return false;
+        return HasLineOfSight(attacker.cell, d.cell);
+    }
+
+    // 操作者のスロット終了後に、そのドローンを解決する（一時停止したら true）
+    bool ResolveDroneTurn(Unit controller)
+    {
+        DroneInfo d = FindDroneControlledBy(controller);
+        if (d == null) return false;
+        if (!DroneUsable(d)) return false;
+        if (!droneOrders.TryGetValue(d, out var dest)) return false;
+        droneOrders.Remove(d);
+
+        // 移動（4マスまで。到着先が塞がれていたら手前の空きマスで止まる）
+        if (dest != d.cell)
+        {
+            Vector2Int stop = FindStopCell(d.cell, dest, true, d);
+            if (stop == d.cell)
+            {
+                Debug.Log($"{DroneName(d)} の移動は失敗（到着先が塞がれていて進めなかった）");
+            }
+            else
+            {
+                d.cell = stop;
+                d.visual.transform.position
+                    = new Vector3(stop.x + 0.5f, stop.y + 0.5f, 0);
+                Debug.Log(stop == dest
+                    ? $"{DroneName(d)} は {dest} へ移動"
+                    : $"{DroneName(d)} は {stop} へ移動（到着先 {dest} が塞がれていたため手前で停止）");
+            }
+        }
+
+        int acts = 1 + d.bonusActions;
+        d.bonusActions = 0;
+
+        switch (d.type)
+        {
+            case DroneType.Damage:
+                if (!AnyDroneTarget(d))
+                {
+                    Debug.Log($"{DroneName(d)}：半径2マス内に攻撃できる敵がいない");
+                    return false;
+                }
+                droneActsLeft = acts;
+                BeginDronePause(d, controller);
+                Debug.Log($"{DroneName(d)} の攻撃：対象を選んでください（命中率75%、威力10）");
+                return true;
+
+            case DroneType.Sensor:
+                var seen = new List<string>();
+                foreach (Unit e in FindObjectsByType<Unit>())
+                {
+                    if (e.team == d.team) continue;
+                    if (Vector2.Distance(d.cell, e.cell) <= 3 + d.searchBonus)
+                        seen.Add($"{e.displayName}（HP {e.hp}）at {e.cell}");
+                }
+                Debug.Log($"{DroneName(d)} のセンサー：{(seen.Count > 0 ? string.Join("、", seen) : "範囲内に敵はいない")}");
+                return false;
+
+            case DroneType.Beacon:
+                int count = 0;
+                foreach (Unit e in FindObjectsByType<Unit>())
+                {
+                    if (e.team == d.team) continue;
+                    if (Vector2.Distance(d.cell, e.cell) <= 3f && !e.beaconed)
+                    {
+                        e.beaconed = true;
+                        count++;
+                        Debug.Log($"{e.displayName} はドローンによってビーコン状態になった");
+                    }
+                }
+                if (count == 0)
+                    Debug.Log($"{DroneName(d)}：半径3マス内にビーコンを付ける敵がいない");
+                return false;
+
+            default: // Dummy は行動なし
+                Debug.Log($"{DroneName(d)} は待機している");
+                return false;
+        }
+    }
+
+    // ドローン側から狙える敵（半径2マス）の有無と判定
+    bool AnyDroneTarget(DroneInfo d)
+    {
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == d.team) continue;
+            if (Vector2.Distance(d.cell, e.cell) > 2f) continue;
+            if (CanDroneTarget(d, e)) return true;
+        }
+        return false;
+    }
+
+    bool CanDroneTarget(DroneInfo d, Unit target)
+    {
+        if (target.beaconed) return true;
+        if (IsSensedBy(d.team, target.cell)) return true;
+        if (IsSmokeCell(target.cell)) return false;
+        if (target.camouflaged) return false;
+        if (terrain != null
+            && terrain.GetTerrain(target.cell) == TerrainType.Bush
+            && !target.exposed
+            && Vector2.Distance(d.cell, target.cell) > 1.5f) return false;
+        return HasLineOfSight(d.cell, target.cell);
+    }
+
+    void BeginDronePause(DroneInfo d, Unit controller)
+    {
+        currentDrone = d;
+        dronePauseController = controller;
+        pauseKind = PauseKind.DroneAttack;
+        var sr = d.visual.GetComponent<SpriteRenderer>();
+        droneOriginalColor = sr.color;
+        sr.color = Color.yellow;
+    }
+
+    void EndDronePause()
+    {
+        if (currentDrone != null)
+        {
+            if (drones.Contains(currentDrone))
+            {
+                var sr = currentDrone.visual.GetComponent<SpriteRenderer>();
+                sr.color = droneOriginalColor;
+            }
+            currentDrone = null;
+        }
+        pauseKind = PauseKind.None;
+        droneActsLeft = 0;
+        ClearHighlights();
+        Unit ctrl = dronePauseController;
+        dronePauseController = null;
+        if (ctrl != null) CompleteSlot(ctrl);
+    }
+
+    // ドローンの攻撃対象のクリック処理
+    void HandleDroneClick(Unit clicked, Vector2Int cell)
+    {
+        DroneInfo d = currentDrone;
+        if (clicked != null && clicked.team != d.team
+            && Vector2.Distance(d.cell, clicked.cell) <= 2f
+            && CanDroneTarget(d, clicked))
+        {
+            ResolveDroneAttack(d, clicked);
+            droneActsLeft--;
+            if (!drones.Contains(d)) { EndDronePause(); return; } // 反射で自滅など
+            if (!gameOver && droneActsLeft > 0 && AnyDroneTarget(d))
+            {
+                Debug.Log($"ドローンはもう1回攻撃できる（残り {droneActsLeft} 回）。対象を選んでください");
+                return;
+            }
+        }
+        else
+        {
+            Debug.Log($"{DroneName(d)} は攻撃しない");
+        }
+        EndDronePause();
+    }
+
+    // ドローンの攻撃（命中率75%固定、威力10、作成者の攻撃力で計算）
+    void ResolveDroneAttack(DroneInfo d, Unit target)
+    {
+        // 鉄壁：半径2マス以内の味方への攻撃をゴウが引き受ける
+        Unit guard = FindGuardFor(target);
+        if (guard != null)
+        {
+            Debug.Log($"鉄壁：{guard.displayName} がドローンの攻撃を {target.displayName} の代わりに受ける");
+            target = guard;
+        }
+
+        int roll = Random.Range(1, 101);
+        if (roll > 75)
+        {
+            Debug.Log($"{DroneName(d)} の攻撃！ 命中率 75% → 出目 {roll} で 外れ");
+            return;
+        }
+
+        float raw = (d.baseAttack + 10) / 2f
+                    * 100f / (100 + target.defense + target.armorBonus);
+        int damage = Mathf.Max(1, Mathf.RoundToInt(raw));
+
+        if (target.ultGuarding)
+        {
+            damage = Mathf.Max(1, damage / 2);
+            Debug.Log($"鉄壁：{target.displayName} の受けるダメージを半減 → {damage}");
+        }
+
+        // シールドブロック判定（ドローンの攻撃はブロック可能）
+        if (target.defending && target.shieldBlockRate > 0)
+        {
+            int blockRoll = Random.Range(1, 101);
+            if (blockRoll <= target.shieldBlockRate)
+            {
+                Debug.Log($"{target.displayName} のシールドブロック成功（率 {target.shieldBlockRate}%、出目 {blockRoll}）ダメージ無効");
+                if (target.hasCounterShield)
+                {
+                    int reflect = Mathf.RoundToInt(damage * 0.5f); // 遠隔扱い50%
+                    if (reflect > 0)
+                    {
+                        Debug.Log($"カウンターシールド：ドローンに {reflect} ダメージを反射");
+                        DamageDrone(d, reflect);
+                    }
+                }
+                return;
+            }
+            Debug.Log($"{target.displayName} のシールドブロック失敗（率 {target.shieldBlockRate}%、出目 {blockRoll}）");
+        }
+
+        target.hp -= damage;
+        Debug.Log($"{DroneName(d)} の攻撃が命中！ 命中率 75% → 出目 {roll}、{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
+
+        if (target.camouflaged)
+        {
+            target.camouflaged = false;
+            Debug.Log($"{target.displayName} は被弾したため光学迷彩が解除された");
+        }
+
+        if (target.hp <= 0)
+        {
+            target.gameObject.SetActive(false);
+            score[OtherTeam(target.team)] += 2;
+            Debug.Log($"{target.displayName} は撃破された。チーム{OtherTeam(target.team)} +2点（スコア {score[1]} - {score[2]}）");
+            CheckWin();
+        }
+    }
+
+    // ユニットからドローンへの攻撃（ドローンの防御・敏捷性は0として計算）
+    void AttackDrone(Unit attacker, DroneInfo d,
+                     bool guaranteedHit = false, float damageMultiplier = 1f)
+    {
+        RevealAttacker(attacker);
+        int hitRate = Mathf.Clamp(Mathf.RoundToInt(
+            attacker.weaponAccuracy + attacker.precision / 2f
+            + (attacker.movedThisTurn ? 0 : 10)), 5, 95);
+        int roll = Random.Range(1, 101);
+        bool hit = guaranteedHit || roll <= hitRate;
+        if (!hit)
+        {
+            Debug.Log($"{attacker.displayName} はドローンを攻撃！ 命中率 {hitRate}% → 出目 {roll} で 外れ");
+        }
+        else
+        {
+            float raw = (attacker.attack + attacker.weaponPower) / 2f;
+            if (!attacker.movedThisTurn) raw *= 1.1f;
+            raw *= damageMultiplier;
+            int dmg = Mathf.Max(1, Mathf.RoundToInt(raw));
+            Debug.Log($"{attacker.displayName} のドローンへの攻撃が命中！（出目 {roll}）");
+            DamageDrone(d, dmg);
+        }
+        attacker.hasAttacked = true;
+    }
+
+    // ハッキングの解決（狙いは指示時点で選択済み。ULTの場合は確実に権限取得）
+    void ResolveHack(Unit hacker, DroneInfo d)
+    {
+        if (pendingUltHack)
+        {
+            SeizeDrone(hacker, d, "オーバーライド");
+            return;
+        }
+        int roll = Random.Range(1, 101);
+        switch (pendingHackType)
+        {
+            case 1: // 機能停止 80%
+                if (roll <= 80)
+                {
+                    d.disabled = true;
+                    SetDroneVisualColor(d);
+                    Debug.Log($"ハッキング成功（出目 {roll}）：{DroneName(d)} は機能停止した");
+                }
+                else Debug.Log($"ハッキング失敗（出目 {roll}）：機能停止は成功率80%");
+                break;
+
+            case 2: // 権限取得 50%
+                if (roll <= 50) SeizeDrone(hacker, d, "ハッキング");
+                else Debug.Log($"ハッキング失敗（出目 {roll}）：権限取得は成功率50%");
+                break;
+
+            default: // 爆破 50%
+                if (roll <= 50)
+                {
+                    Debug.Log($"ハッキング成功（出目 {roll}）：{DroneName(d)} が爆発した！");
+                    ExplodeDrone(d);
+                }
+                else Debug.Log($"ハッキング失敗（出目 {roll}）：爆破は成功率50%");
+                break;
+        }
+    }
+
+    void SeizeDrone(Unit hacker, DroneInfo d, string how)
+    {
+        // 操作者は同時に1体まで：すでに別のドローンを操作中なら、そちらは機能停止する
+        DroneInfo prev = FindDroneControlledBy(hacker);
+        if (prev != null && prev != d)
+        {
+            prev.disabled = true;
+            SetDroneVisualColor(prev);
+            Debug.Log($"操作の上限（1体まで）のため、{DroneName(prev)} は機能停止した");
+        }
+        d.controller = hacker;
+        d.team = hacker.team;
+        d.disabled = false;
+        if (d.type != DroneType.Dummy)
+        {
+            d.baseColor = hacker.team == 1
+                ? new Color(0.35f, 0.65f, 1f, 0.9f)
+                : new Color(1f, 0.5f, 0.35f, 0.9f);
+        }
+        droneOrders.Remove(d);
+        SetDroneVisualColor(d);
+        Debug.Log($"{how}成功：{DroneName(d)} の権限を取得した（チーム{hacker.team} のドローンとして使える）");
+    }
+
+    // 爆破：ドローンのマスの周囲1マス全員に20ダメージ（固定、味方にも当たる）
+    void ExplodeDrone(DroneInfo d)
+    {
+        Vector2Int center = d.cell;
+        DestroyDrone(d);
+        foreach (Unit u in FindObjectsByType<Unit>())
+        {
+            if (Vector2.Distance(center, u.cell) > 1f) continue;
+            u.hp -= 20;
+            Debug.Log($"{u.displayName} は爆発で20ダメージ（固定、残りHP {Mathf.Max(u.hp, 0)}）");
+            if (u.camouflaged)
+            {
+                u.camouflaged = false;
+                Debug.Log($"{u.displayName} は被弾したため光学迷彩が解除された");
+            }
+            if (u.hp <= 0)
+            {
+                u.gameObject.SetActive(false);
+                score[OtherTeam(u.team)] += 2;
+                Debug.Log($"{u.displayName} は撃破された。チーム{OtherTeam(u.team)} +2点（スコア {score[1]} - {score[2]}）");
+            }
+        }
+        CheckWin();
+    }
+
+    // 視線チェック：壁だけが視線を遮る（水場・ブッシュは遮らない）
+    bool HasLineOfSight(Vector2Int from, Vector2Int to)
+    {
+        if (terrain == null) return true;
+        var a = new Vector2(from.x + 0.5f, from.y + 0.5f);
+        var b = new Vector2(to.x + 0.5f, to.y + 0.5f);
+        int steps = Mathf.CeilToInt(Vector2.Distance(a, b) * 4f);
+        for (int i = 1; i < steps; i++)
+        {
+            Vector2 p = Vector2.Lerp(a, b, (float)i / steps);
+            var cell = new Vector2Int(Mathf.FloorToInt(p.x), Mathf.FloorToInt(p.y));
+            if (cell == from || cell == to) continue;
+            if (terrain.GetTerrain(cell) == TerrainType.Wall) return false;
+            if (IsSmokeCell(cell)) return false; // 煙幕も視線を遮る（壁と同じ扱い）
+        }
+        return true;
+    }
+
+    // 指定チームのセンサー範囲内にそのマスが入っているか
+    bool IsSensedBy(int team, Vector2Int cell)
+    {
+        foreach (Unit s in sensorUsers)
+        {
+            if (s.team != team || !s.gameObject.activeSelf) continue;
+            int radius = 4 + s.search / 25;
+            if (Vector2.Distance(s.cell, cell) <= radius) return true;
+        }
+        // センサードローンの範囲（半径3＋作成者の索敵ボーナス）
+        foreach (DroneInfo d in drones)
+        {
+            if (d.type != DroneType.Sensor || d.team != team) continue;
+            if (!DroneUsable(d)) continue;
+            if (Vector2.Distance(d.cell, cell) <= 3 + d.searchBonus) return true;
+        }
+        return false;
+    }
+
+    // viewer が target を目視できているか（情報戦の基本判定）
+    bool CanSee(Unit viewer, Unit target)
+    {
+        if (target == null || !target.gameObject.activeSelf) return false;
+        if (viewer == target || viewer.team == target.team) return true;
+        if (target.beaconed) return true; // 位置を把握：壁抜き・迷彩も貫通
+        if (IsSensedBy(viewer.team, target.cell)) return true; // センサーは迷彩・ブッシュを看破
+        if (IsSmokeCell(target.cell)) return false; // 煙幕の中のユニットは目視不可
+
+        float dist = Vector2.Distance(viewer.cell, target.cell);
+        if (dist > viewer.VisionRange) return false;
+        if (target.camouflaged && viewer.search < 80) return false; // 迷彩は索敵80以上が看破
+        if (terrain != null
+            && terrain.GetTerrain(target.cell) == TerrainType.Bush
+            && !target.exposed && dist > 1.5f) return false; // ブッシュは隣接しないと見えない
+        return HasLineOfSight(viewer.cell, target.cell);
+    }
+
+    // 射程内にいて、かつ目視できている敵がいるか（攻撃対象にできる敵）
+    bool AnyTargetableEnemy(Unit unit, Vector2Int origin)
+    {
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == unit.team) continue;
+            if (Vector2.Distance(origin, e.cell) > unit.weaponRange) continue;
+            if (CanSee(unit, e)) return true;
+        }
+        foreach (DroneInfo d in drones)
+        {
+            if (d.team == unit.team) continue;
+            if (Vector2.Distance(origin, d.cell) > unit.weaponRange) continue;
+            if (CanTargetDrone(unit, d)) return true;
+        }
+        return false;
+    }
+
+    // 攻撃可能な対象の名前一覧（対象選択時のログ用）
+    string TargetableNames(Unit unit)
+    {
+        var names = new List<string>();
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == unit.team) continue;
+            if (Vector2.Distance(unit.cell, e.cell) > unit.weaponRange) continue;
+            if (CanSee(unit, e)) names.Add(e.displayName);
+        }
+        foreach (DroneInfo d in drones)
+        {
+            if (d.team == unit.team) continue;
+            if (Vector2.Distance(unit.cell, d.cell) > unit.weaponRange) continue;
+            if (CanTargetDrone(unit, d)) names.Add(DroneName(d));
+        }
+        return names.Count > 0 ? string.Join("、", names) : "なし";
+    }
+
     // グレネードランチャーを装備しているか
     bool IsGrenadeUser(Unit unit)
         => unit.weapon != null && unit.weapon.name == "W_Grenade";
+
+    // ---- トラップとスモーク（7-2） ----
+
+    int TrapUsesLeft(Unit u)
+        => 3 - (trapUses.TryGetValue(u, out int n) ? n : 0);
+
+    int SmokeUsesLeft(Unit u)
+        => 3 - (smokeUses.TryGetValue(u, out int n) ? n : 0);
+
+    static string TrapLabel(TrapType type) => type switch
+    {
+        TrapType.Damage => "ダメージ",
+        TrapType.Stun => "行動不能",
+        _ => "ビーコン",
+    };
+
+    // トラップ設置中：数字キーで種類を切り替える
+    void SetTrapType(TrapType type)
+    {
+        pendingTrapType = type;
+        Debug.Log($"トラップの種類：{TrapLabel(type)}（設置するマスをクリック）");
+    }
+
+    void PlaceTrap(Unit u, Vector2Int cell, TrapType type)
+    {
+        trapUses[u] = (trapUses.TryGetValue(u, out int n) ? n : 0) + 1;
+        var visual = Instantiate(highlightPrefab);
+        visual.transform.position = new Vector3(cell.x + 0.5f, cell.y + 0.5f, 0);
+        visual.transform.localScale = Vector3.one * 0.55f;
+        var sr = visual.GetComponent<SpriteRenderer>();
+        sr.sortingOrder = 1;
+        sr.color = type switch
+        {
+            TrapType.Damage => new Color(0.9f, 0.25f, 0.15f, 0.85f),
+            TrapType.Stun => new Color(0.6f, 0.3f, 0.9f, 0.85f),
+            _ => new Color(0.95f, 0.8f, 0.2f, 0.85f),
+        };
+        traps.Add(new TrapInfo
+        {
+            cell = cell,
+            type = type,
+            ownerTeam = u.team,
+            visual = visual
+        });
+        Debug.Log($"{u.displayName} は {cell} に{TrapLabel(type)}トラップを設置した（残り {TrapUsesLeft(u)} 回）※本来は敵に非表示だが、共有画面のため表示している");
+    }
+
+    // 移動したユニットが敵トラップの半径1マス以内に入っていたら発動させる
+    void CheckTraps(Unit moved)
+    {
+        for (int i = traps.Count - 1; i >= 0; i--)
+        {
+            TrapInfo t = traps[i];
+            if (t.ownerTeam == moved.team) continue;
+            if (Vector2.Distance(t.cell, moved.cell) > 1f) continue;
+
+            traps.RemoveAt(i);
+            if (t.visual != null) Destroy(t.visual);
+
+            switch (t.type)
+            {
+                case TrapType.Damage:
+                    moved.hp -= 20;
+                    Debug.Log($"トラップ発動！ {moved.displayName} はダメージトラップで20ダメージ（固定・防御無視、残りHP {Mathf.Max(moved.hp, 0)}）");
+                    if (moved.camouflaged)
+                    {
+                        moved.camouflaged = false;
+                        Debug.Log($"{moved.displayName} は被弾して光学迷彩が解除された");
+                    }
+                    if (moved.hp <= 0)
+                    {
+                        Debug.Log($"{moved.displayName} を撃破！");
+                        moved.gameObject.SetActive(false);
+                        score[t.ownerTeam] += 2;
+                        Debug.Log($"チーム{t.ownerTeam} +2点（スコア {score[1]} - {score[2]}）");
+                        CheckWin();
+                    }
+                    break;
+
+                case TrapType.Stun:
+                    moved.stunTurns = 1;
+                    Debug.Log($"トラップ発動！ {moved.displayName} は行動不能トラップにかかった");
+                    break;
+
+                case TrapType.Beacon:
+                    moved.beaconed = true;
+                    Debug.Log($"トラップ発動！ {moved.displayName} はビーコントラップでビーコン状態になった");
+                    break;
+            }
+
+            if (!moved.gameObject.activeSelf) return; // 倒れたら以降の判定は不要
+        }
+    }
+
+    void PlaceSmoke(Unit u, Vector2Int center)
+    {
+        smokeUses[u] = (smokeUses.TryGetValue(u, out int n) ? n : 0) + 1;
+        var cloud = new SmokeCloud { remainingTurnEnds = 2 };
+        var dirs = new Vector2Int[]
+        {
+            new(0, 0), new(1, 0), new(-1, 0), new(0, 1), new(0, -1),
+        };
+        foreach (var d in dirs)
+        {
+            Vector2Int c = center + d;
+            if (!Inside(c)) continue;
+            cloud.cells.Add(c);
+            var visual = Instantiate(highlightPrefab);
+            visual.transform.position = new Vector3(c.x + 0.5f, c.y + 0.5f, 0);
+            var sr = visual.GetComponent<SpriteRenderer>();
+            sr.sortingOrder = 1;
+            sr.color = new Color(0.55f, 0.55f, 0.6f, 0.5f);
+            cloud.visuals.Add(visual);
+        }
+        smokes.Add(cloud);
+        Debug.Log($"{u.displayName} は {center} を中心にスモークを展開した（十字5マス、2ターンの終了時まで持続。残り {SmokeUsesLeft(u)} 回）");
+    }
+
+    bool IsSmokeCell(Vector2Int cell)
+    {
+        foreach (var s in smokes)
+        {
+            if (s.cells.Contains(cell)) return true;
+        }
+        return false;
+    }
+
+    // トラップ設置用：自分のマスと周囲1マスの通行可能なマスを表示
+    void ShowTrapRange(Unit unit)
+    {
+        ClearHighlights();
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                Vector2Int c = unit.cell + new Vector2Int(dx, dy);
+                if (!Inside(c)) continue;
+                if (terrain != null && !terrain.IsPassable(c)) continue;
+                bool hasTrap = false;
+                foreach (var t in traps)
+                {
+                    if (t.cell == c) { hasTrap = true; break; }
+                }
+                if (hasTrap) continue;
+                movable.Add(c);
+                AddHighlight(c, new Color(0.9f, 0.4f, 0.1f, 0.35f));
+            }
+        }
+    }
+
+    // 指定した起点・半径の範囲を表示（スモーク設置先の選択用）
+    void ShowRadiusFrom(Vector2Int origin, int radius, Color color)
+    {
+        ClearHighlights();
+        for (int dx = -radius; dx <= radius; dx++)
+        {
+            for (int dy = -radius; dy <= radius; dy++)
+            {
+                Vector2Int c = origin + new Vector2Int(dx, dy);
+                if (!Inside(c)) continue;
+                if (Vector2.Distance(origin, c) > radius) continue;
+                attackable.Add(c);
+                AddHighlight(c, color);
+            }
+        }
+    }
 
     int OtherTeam(int team) => team == 1 ? 2 : 1;
 
@@ -964,6 +2326,9 @@ public class GameController : MonoBehaviour
             ClearMarker(o);
             orders.Remove(u);
         }
+        // 指示を消すと、その操作者のドローンの指示も消える
+        DroneInfo drone = FindDroneControlledBy(u);
+        if (drone != null) droneOrders.Remove(drone);
     }
 
     void PlaceMarker(Order o, Vector2Int cell)
@@ -1017,15 +2382,54 @@ public class GameController : MonoBehaviour
         return false;
     }
 
+    // 攻撃すると姿を現し（ブッシュの隠蔽が解ける）、光学迷彩も解除される
+    void RevealAttacker(Unit attacker)
+    {
+        attacker.exposed = true;
+        if (attacker.camouflaged)
+        {
+            attacker.camouflaged = false;
+            Debug.Log($"{attacker.displayName} は攻撃のため光学迷彩が解除された");
+        }
+    }
+
     void Attack(Unit attacker, Unit target,
                 bool guaranteedHit = false, float damageMultiplier = 1f)
     {
-        // 鉄壁：半径2マス以内の味方への攻撃をゴウが引き受ける
-        Unit guard = FindGuardFor(target);
-        if (guard != null)
+        RevealAttacker(attacker);
+
+        // フレンドリーファイア：射撃武器（射程3以上）で、対象との間に
+        // 味方がいると25%の確率で誤射し、その味方に通常の攻撃判定を行う
+        bool friendlyFire = false;
+        if (attacker.weaponRange >= 3)
         {
-            Debug.Log($"{guard.displayName} の鉄壁！ {target.displayName} への攻撃を引き受けた");
-            target = guard;
+            Unit inLine = FirstAllyInLine(attacker, target);
+            if (inLine != null)
+            {
+                int ffRoll = Random.Range(1, 101);
+                if (ffRoll <= 25)
+                {
+                    friendlyFire = true;
+                    target = inLine;
+                    guaranteedHit = false; // 誤射は必中にならない
+                    Debug.Log($"フレンドリーファイア！（発生率25%、出目 {ffRoll}）射線にいた {inLine.displayName} を誤射した");
+                }
+                else
+                {
+                    Debug.Log($"射線に {inLine.displayName} がいたが誤射はしなかった（発生率25%、出目 {ffRoll}）");
+                }
+            }
+        }
+
+        // 鉄壁：半径2マス以内の味方への攻撃をゴウが引き受ける
+        if (!friendlyFire)
+        {
+            Unit guard = FindGuardFor(target);
+            if (guard != null)
+            {
+                Debug.Log($"{guard.displayName} の鉄壁！ {target.displayName} への攻撃を引き受けた");
+                target = guard;
+            }
         }
 
         // ハンマーはシールドの防御補正とブロックを無視する
@@ -1061,8 +2465,11 @@ public class GameController : MonoBehaviour
     // 命中した攻撃のダメージ処理（通常攻撃とグレネードの範囲攻撃で共用）
     // ※キルの得点は「倒されたユニットの相手チーム」に入る
     // 　（範囲攻撃で味方を巻き込んでも、自チームに点は入らない）
+    // ※countsForLinkage：連携追撃の起点・2人目に数える攻撃か
+    // 　（通常の単体攻撃のみtrue。範囲攻撃と連携追撃そのものはfalse）
     void ApplyHitDamage(Unit attacker, Unit target, bool isHammer,
-                        float damageMultiplier = 1f)
+                        float damageMultiplier = 1f,
+                        bool countsForLinkage = true)
     {
         int defBonus = target.armorBonus
                        - (isHammer ? target.shieldBonus : 0);
@@ -1118,13 +2525,22 @@ public class GameController : MonoBehaviour
         target.hp -= damage;
         Debug.Log($"{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
 
+        // 被弾すると光学迷彩は解除される
+        if (target.camouflaged)
+        {
+            target.camouflaged = false;
+            Debug.Log($"{target.displayName} は被弾して光学迷彩が解除された");
+        }
+
         // 状態異常の付与（ダメージが通って、対象が生き残った場合のみ）
         if (target.hp > 0)
         {
             if (HasItem(attacker, "毒付与") && !target.poisoned)
             {
                 target.poisoned = true;
-                target.poisonSourceTeam = attacker.team;
+                // 毒で倒れた場合の得点先は「倒された側の相手チーム」
+                // （誤射や範囲攻撃で味方を毒にした場合も同じ扱い）
+                target.poisonSourceTeam = OtherTeam(target.team);
                 Debug.Log($"{target.displayName} は毒状態になった！");
             }
             if (HasItem(attacker, "ビーコン弾") && !target.beaconed)
@@ -1141,13 +2557,101 @@ public class GameController : MonoBehaviour
             int credit = OtherTeam(target.team);
             score[credit] += 2;
             Debug.Log($"チーム{credit} +2点（スコア {score[1]} - {score[2]}）");
+            return;
         }
+
+        // 連携追撃：同じターンに別の味方の単体攻撃が同じ敵に命中したら、
+        // 30%で最初の攻撃者が追撃する（通常ダメージの50%、必中、部隊で1回まで）
+        if (countsForLinkage && target.team != attacker.team
+            && !linkageUsedTeams.Contains(attacker.team))
+        {
+            if (firstHitBy.TryGetValue(target, out Unit first)
+                && first != attacker && first.gameObject.activeSelf)
+            {
+                int roll = Random.Range(1, 101);
+                if (roll <= 30)
+                {
+                    linkageUsedTeams.Add(attacker.team);
+                    bool firstHammer = first.weapon != null
+                                       && first.weapon.name == "W_Hammer";
+                    Debug.Log($"連携追撃！（発動率30%、出目 {roll}）{first.displayName} が {target.displayName} に追撃する（通常ダメージの50%、必中）");
+                    ApplyHitDamage(first, target, firstHammer, 0.5f, false);
+                }
+                else
+                {
+                    Debug.Log($"連携追撃は発生しなかった（発動率30%、出目 {roll}）");
+                }
+            }
+            else
+            {
+                firstHitBy[target] = attacker;
+            }
+        }
+    }
+
+    // 攻撃者と対象の間にいる、最も攻撃者に近い味方ユニット（射線判定）
+    Unit FirstAllyInLine(Unit attacker, Unit target)
+    {
+        Vector2 pa = attacker.cell;
+        Vector2 pt = target.cell;
+        Vector2 seg = pt - pa;
+        float len2 = seg.sqrMagnitude;
+        if (len2 < 0.01f) return null;
+
+        Unit best = null;
+        float bestT = float.MaxValue;
+        foreach (Unit u in FindObjectsByType<Unit>())
+        {
+            if (u.team != attacker.team || u == attacker || u == target)
+                continue;
+            Vector2 pu = u.cell;
+            float t = Mathf.Clamp01(Vector2.Dot(pu - pa, seg) / len2);
+            Vector2 closest = pa + seg * t;
+            if (Vector2.Distance(pu, closest) <= 0.51f && t < bestT)
+            {
+                best = u;
+                bestT = t;
+            }
+        }
+        return best;
+    }
+
+    // 到着先が塞がれている場合に、来た方向へ1マスずつ戻って
+    // 止まれるマスを探す（見つからなければ出発マス＝その場に留まる）
+    Vector2Int FindStopCell(Vector2Int from, Vector2Int dest,
+                            bool dronesBlock, DroneInfo selfDrone)
+    {
+        if (StoppableCell(dest, dronesBlock, selfDrone)) return dest;
+        Vector2Int c = dest;
+        while (c != from)
+        {
+            c += new Vector2Int(
+                (int)Mathf.Sign(from.x - c.x),
+                (int)Mathf.Sign(from.y - c.y));
+            if (StoppableCell(c, dronesBlock, selfDrone)) return c;
+        }
+        return from;
+    }
+
+    bool StoppableCell(Vector2Int cell, bool dronesBlock, DroneInfo selfDrone)
+    {
+        if (!Inside(cell)) return false;
+        if (terrain != null && !terrain.IsPassable(cell)) return false;
+        if (FindUnitAt(cell) != null) return false;
+        if (dronesBlock)
+        {
+            DroneInfo d = FindDroneAt(cell);
+            if (d != null && d != selfDrone) return false;
+        }
+        return true;
     }
 
     // グレネードランチャー：地点指定の範囲攻撃＋着弾点の地形破壊
     void ResolveGrenade(Unit attacker, Vector2Int targetCell,
                         int radius, int terrainMult)
     {
+        RevealAttacker(attacker); // グレネードも攻撃扱い
+
         // 命中判定（相手の敏捷性は使わない）
         int hitRate = Mathf.Clamp(
             Mathf.RoundToInt(70f + (attacker.precision - 50) / 2f
@@ -1211,7 +2715,18 @@ public class GameController : MonoBehaviour
         {
             if (!v.gameObject.activeSelf) continue;
             float mult = v.cell == impact ? 1f : 0.5f;
-            ApplyHitDamage(attacker, v, false, mult);
+            ApplyHitDamage(attacker, v, false, mult, false);
+        }
+
+        // ドローンも爆風を受ける（防御0として計算）
+        foreach (DroneInfo d in drones.ToArray())
+        {
+            if (Vector2.Distance(impact, d.cell) > radius) continue;
+            float mult = d.cell == impact ? 1f : 0.5f;
+            float raw = (attacker.attack + attacker.weaponPower) / 2f;
+            if (!attacker.movedThisTurn) raw *= 1.1f;
+            int dmg = Mathf.Max(1, Mathf.RoundToInt(raw * mult));
+            DamageDrone(d, dmg);
         }
 
         // 地形破壊：実際の着弾点のみ（地形へのダメージは防御0で計算）
@@ -1322,15 +2837,21 @@ public class GameController : MonoBehaviour
                 if (!Inside(c)) continue;
                 if (terrain != null && !terrain.IsPassable(c)) continue;
 
-                bool occupied = false;
+                // 敵のいるマスは指定できない。味方のいるマスは指定できる
+                // （解決時に空いていれば入り、塞がっていれば手前で止まる）
+                bool enemyThere = false;
+                bool allyThere = false;
                 foreach (Unit u in all)
                 {
-                    if (u != unit && u.cell == c) { occupied = true; break; }
+                    if (u == unit || u.cell != c) continue;
+                    if (u.team != unit.team) enemyThere = true;
+                    else allyThere = true;
                 }
-                if (occupied) continue;
+                if (enemyThere) continue;
 
                 movable.Add(c);
-                AddHighlight(c, null);
+                AddHighlight(c, allyThere
+                    ? new Color(1f, 0.85f, 0.3f, 0.35f) : (Color?)null);
             }
         }
 

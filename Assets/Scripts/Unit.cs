@@ -39,6 +39,9 @@ public class Unit : MonoBehaviour
     public bool beaconed = false;
     public int stunTurns = 0; // 0より大きい間は行動不能
 
+    [Header("情報戦")]
+    public bool camouflaged = false; // 光学迷彩が有効か（攻撃・被弾で解除）
+
     [HideInInspector]
     public int poisonSourceTeam = 0; // 毒を付与したチーム（毒で倒したときの得点用）
     [HideInInspector]
@@ -49,8 +52,13 @@ public class Unit : MonoBehaviour
     public bool defending = false; // 防御準備をしたらtrue
     [HideInInspector]
     public bool ultGuarding = false; // 鉄壁（ゴウのULT）発動中
+    [HideInInspector]
+    public bool exposed = false; // ブッシュ等で攻撃して姿を現した（ターン終了でリセット）
 
     public int MoveTiles => Mathf.Max(1, mobility / 7);
+
+    // 目視範囲（ルールブック3.2：5 ＋ 索敵÷20、切り捨て）
+    public int VisionRange => 5 + search / 20;
 
     void Start()
     {
