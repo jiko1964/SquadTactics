@@ -26,7 +26,7 @@ public class GameController : MonoBehaviour
     // 解決中の一時停止の種類
     private enum PauseKind
     {
-        None, Attack, KaedeMove, KaedeAttack, YukiSnipe, SakuraHeal
+        None, Attack, KaedeMove, KaedeAttack, YukiSnipe, SakuraHeal, Grenade
     }
 
     // 1体分の指示：移動先＋準備行動
@@ -52,6 +52,14 @@ public class GameController : MonoBehaviour
     private readonly int[] score = new int[3];
     private TerrainGrid terrain;
 
+    // ネクサス（中央運河では中央の橋の4マス）と、その通算得点
+    private readonly HashSet<Vector2Int> nexusCells = new()
+    {
+        new Vector2Int(8, 8), new Vector2Int(9, 8),
+        new Vector2Int(8, 9), new Vector2Int(9, 9),
+    };
+    private readonly int[] nexusScored = new int[3];
+
     // 同時入力：チームごとの準備完了フラグと制限時間タイマー
     private readonly bool[] teamReady = new bool[3];
     private float orderTimer = 0f;
@@ -65,6 +73,8 @@ public class GameController : MonoBehaviour
     private Unit currentAttacker; // 一時停止中のユニット
     private PauseKind pauseKind = PauseKind.None;
     private int ultAttacksLeft = 0; // 疾風斬の残り攻撃回数
+    private int pauseGrenadeRadius = 1; // グレネード一時停止中の爆風半径
+    private int pauseGrenadeMult = 1;   // グレネード一時停止中の地形ダメージ倍率
     private Color attackerOriginalColor;
     private Vector3 attackerOriginalScale;
 
@@ -274,6 +284,20 @@ public class GameController : MonoBehaviour
                 else
                 {
                     Debug.Log($"{currentAttacker.displayName} は緊急治療を使わなかった（EXは消費済み）");
+                }
+                EndAttackSelection();
+                return;
+
+            case PauseKind.Grenade:
+                // 地点指定：射程内のマスをクリックで着弾（ユニットの有無は問わない）
+                if (attackable.Contains(cell))
+                {
+                    ResolveGrenade(currentAttacker, cell,
+                        pauseGrenadeRadius, pauseGrenadeMult);
+                }
+                else
+                {
+                    Debug.Log($"{currentAttacker.displayName} はグレネードを撃たなかった");
                 }
                 EndAttackSelection();
                 return;
@@ -522,6 +546,19 @@ public class GameController : MonoBehaviour
                             Debug.Log($"{u.displayName} はEXマスに止まった（EXは上限の{Unit.MaxEx}）");
                         }
                     }
+
+                    // ヒールポイント：止まると回復15＋毒解除（1回使うと消滅）
+                    if (terrain != null
+                        && terrain.GetTerrain(u.cell) == TerrainType.Heal
+                        && terrain.ConsumeHeal(u.cell))
+                    {
+                        int beforeHp = u.hp;
+                        u.hp = Mathf.Min(u.maxHp, u.hp + 15);
+                        bool curedPoison = u.poisoned;
+                        u.poisoned = false;
+                        if (curedPoison) u.poisonSourceTeam = 0;
+                        Debug.Log($"{u.displayName} はヒールポイントで回復：HP {beforeHp} → {u.hp}{(curedPoison ? "、毒を解除" : "")}（このヒールポイントは消滅）");
+                    }
                 }
                 else
                 {
@@ -562,6 +599,23 @@ public class GameController : MonoBehaviour
             }
             if (action == PreparedAction.Attack)
             {
+                if (IsGrenadeUser(u))
+                {
+                    // グレネードは地点指定攻撃：爆風が届く範囲に敵がいれば発射できる
+                    if (AnyEnemyWithin(u, u.cell, u.weaponRange + 1))
+                    {
+                        pauseGrenadeRadius = 1;
+                        pauseGrenadeMult = 1;
+                        BeginPause(u, PauseKind.Grenade);
+                        ShowAttackRangeFrom(u, u.cell,
+                            new Color(1f, 0.5f, 0f, 0.35f));
+                        Debug.Log($"{u.displayName} のグレネード：着弾させるマスを選んでください（撃たない場合はSpace）");
+                        return;
+                    }
+                    Debug.Log($"{u.displayName} の攻撃準備：爆風の届く範囲に敵がおらずスキップ");
+                    resolveIndex++;
+                    continue;
+                }
                 if (AnyEnemyInRange(u, u.cell))
                 {
                     // 対象選択のため一時停止
@@ -695,7 +749,28 @@ public class GameController : MonoBehaviour
                 if (!found) Debug.Log("　スキャン範囲に敵はいなかった");
                 return false;
 
-            default: // ノイ・レン・ミコトは依存システムのステップで実装
+            case "レン": // 破砕砲撃：そのターンのグレネードが半径2＋地形ダメージ2倍
+                if (!IsGrenadeUser(u))
+                {
+                    Debug.Log($"{u.displayName} のULT「{ultName}」：グレネードランチャーを装備していないため不発（EXは消費しない）");
+                    return false;
+                }
+                if (!AnyEnemyWithin(u, u.cell, u.weaponRange + 2))
+                {
+                    Debug.Log($"{u.displayName} のULT「{ultName}」：爆風の届く範囲に敵がおらず不発（EXは消費しない）");
+                    return false;
+                }
+                u.exPoints--;
+                Debug.Log($"{u.displayName} のULT「{ultName}」発動！（EX {u.exPoints}/{Unit.MaxEx}）グレネードの半径2＋地形ダメージ2倍");
+                pauseGrenadeRadius = 2;
+                pauseGrenadeMult = 2;
+                BeginPause(u, PauseKind.Grenade);
+                ShowAttackRangeFrom(u, u.cell,
+                    new Color(1f, 0.5f, 0f, 0.35f));
+                Debug.Log("着弾させるマスを選んでください");
+                return true;
+
+            default: // ノイ・ミコトは依存システムのステップで実装
                 Debug.Log($"{u.displayName} のULT「{ultName}」の効果は後続ステップで実装（EXは消費しない）");
                 return false;
         }
@@ -732,6 +807,9 @@ public class GameController : MonoBehaviour
         // ターン終了処理：毒ダメージ
         ApplyPoisonDamage();
         if (gameOver) { RefreshReadyUI(); return; }
+
+        // ターン終了処理：ネクサス得点
+        ApplyNexusScoring();
 
         orders.Clear();
         teamReady[1] = false;
@@ -795,16 +873,45 @@ public class GameController : MonoBehaviour
         CheckWin();
     }
 
+    // ターン終了処理：ネクサスマスに止まっている陣営に1点（1ターン1点まで、1試合3点まで）
+    void ApplyNexusScoring()
+    {
+        for (int team = 1; team <= 2; team++)
+        {
+            if (nexusScored[team] >= 3) continue;
+            foreach (Unit u in FindObjectsByType<Unit>())
+            {
+                if (u.team != team) continue;
+                if (!nexusCells.Contains(u.cell)) continue;
+                score[team] += 1;
+                nexusScored[team]++;
+                Debug.Log($"{u.displayName} がネクサスを保持：チーム{team} +1点（ネクサス通算 {nexusScored[team]}/3、スコア {score[1]} - {score[2]}）");
+                break;
+            }
+        }
+    }
+
     bool AnyEnemyInRange(Unit unit, Vector2Int origin)
+    {
+        return AnyEnemyWithin(unit, origin, unit.weaponRange);
+    }
+
+    bool AnyEnemyWithin(Unit unit, Vector2Int origin, float distance)
     {
         foreach (Unit u in FindObjectsByType<Unit>())
         {
             if (u.team == unit.team) continue;
-            if (Vector2.Distance(origin, u.cell) <= unit.weaponRange)
+            if (Vector2.Distance(origin, u.cell) <= distance)
                 return true;
         }
         return false;
     }
+
+    // グレネードランチャーを装備しているか
+    bool IsGrenadeUser(Unit unit)
+        => unit.weapon != null && unit.weapon.name == "W_Grenade";
+
+    int OtherTeam(int team) => team == 1 ? 2 : 1;
 
     void CheckWin()
     {
@@ -946,90 +1053,237 @@ public class GameController : MonoBehaviour
                 : $"{attacker.displayName} の攻撃！ 命中率 {hitRate}% → 出目 {roll} で 外れ");
         }
 
-        if (hit)
-        {
-            int defBonus = target.armorBonus
-                           - (isHammer ? target.shieldBonus : 0);
-            if (isHammer && (target.shieldBonus > 0 || target.shieldBlockRate > 0))
-                Debug.Log("ハンマーはシールドの防御補正とブロックを無視");
-
-            float raw = (attacker.attack + attacker.weaponPower) / 2f
-                        * 100f / (100 + target.defense + defBonus);
-            if (!attacker.movedThisTurn) raw *= 1.1f;
-            raw *= damageMultiplier;
-            int damage = Mathf.Max(1, Mathf.RoundToInt(raw));
-
-            // 鉄壁発動中：受けるダメージ半減
-            if (target.ultGuarding)
-            {
-                damage = Mathf.Max(1, Mathf.RoundToInt(damage * 0.5f));
-                Debug.Log($"{target.displayName} の鉄壁でダメージ半減 → {damage}");
-            }
-
-            // シールドのブロック判定（防御準備中のみ、ハンマーは対象外）
-            if (target.defending && target.shieldBlockRate > 0 && !isHammer)
-            {
-                int blockRoll = Random.Range(1, 101);
-                if (blockRoll <= target.shieldBlockRate)
-                {
-                    Debug.Log($"{target.displayName} のシールドがブロック成功（出目 {blockRoll} ≤ {target.shieldBlockRate}%）→ ダメージ無効");
-
-                    // カウンターシールド：軽減後ダメージの一部を反射
-                    if (target.hasCounterShield)
-                    {
-                        bool melee = attacker.weaponRange <= 2;
-                        int reflect = Mathf.RoundToInt(
-                            damage * (melee ? 0.75f : 0.5f));
-                        if (reflect > 0)
-                        {
-                            attacker.hp -= reflect;
-                            Debug.Log($"カウンターシールドの反射！ {attacker.displayName} に {reflect} ダメージ（残りHP {Mathf.Max(attacker.hp, 0)}）");
-                            if (attacker.hp <= 0)
-                            {
-                                Debug.Log($"{attacker.displayName} を撃破！");
-                                attacker.gameObject.SetActive(false);
-                                score[target.team] += 2;
-                                Debug.Log($"チーム{target.team} +2点（スコア {score[1]} - {score[2]}）");
-                            }
-                        }
-                    }
-
-                    attacker.hasAttacked = true;
-                    CheckWin();
-                    return;
-                }
-                Debug.Log($"{target.displayName} のブロック失敗（出目 {blockRoll} > {target.shieldBlockRate}%）");
-            }
-
-            target.hp -= damage;
-            Debug.Log($"{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
-
-            // 状態異常の付与（ダメージが通って、対象が生き残った場合のみ）
-            if (target.hp > 0)
-            {
-                if (HasItem(attacker, "毒付与") && !target.poisoned)
-                {
-                    target.poisoned = true;
-                    target.poisonSourceTeam = attacker.team;
-                    Debug.Log($"{target.displayName} は毒状態になった！");
-                }
-                if (HasItem(attacker, "ビーコン弾") && !target.beaconed)
-                {
-                    target.beaconed = true;
-                    Debug.Log($"{target.displayName} にビーコンが付着した！（壁抜き等の効果は情報戦ステップで実装）");
-                }
-            }
-
-            if (target.hp <= 0)
-            {
-                Debug.Log($"{target.displayName} を撃破！");
-                target.gameObject.SetActive(false);
-                score[attacker.team] += 2;
-                Debug.Log($"チーム{attacker.team} +2点（スコア {score[1]} - {score[2]}）");
-            }
-        }
+        if (hit) ApplyHitDamage(attacker, target, isHammer, damageMultiplier);
         attacker.hasAttacked = true;
         CheckWin();
+    }
+
+    // 命中した攻撃のダメージ処理（通常攻撃とグレネードの範囲攻撃で共用）
+    // ※キルの得点は「倒されたユニットの相手チーム」に入る
+    // 　（範囲攻撃で味方を巻き込んでも、自チームに点は入らない）
+    void ApplyHitDamage(Unit attacker, Unit target, bool isHammer,
+                        float damageMultiplier = 1f)
+    {
+        int defBonus = target.armorBonus
+                       - (isHammer ? target.shieldBonus : 0);
+        if (isHammer && (target.shieldBonus > 0 || target.shieldBlockRate > 0))
+            Debug.Log("ハンマーはシールドの防御補正とブロックを無視");
+
+        float raw = (attacker.attack + attacker.weaponPower) / 2f
+                    * 100f / (100 + target.defense + defBonus);
+        if (!attacker.movedThisTurn) raw *= 1.1f;
+        raw *= damageMultiplier;
+        int damage = Mathf.Max(1, Mathf.RoundToInt(raw));
+
+        // 鉄壁発動中：受けるダメージ半減
+        if (target.ultGuarding)
+        {
+            damage = Mathf.Max(1, Mathf.RoundToInt(damage * 0.5f));
+            Debug.Log($"{target.displayName} の鉄壁でダメージ半減 → {damage}");
+        }
+
+        // シールドのブロック判定（防御準備中のみ、ハンマーは対象外）
+        if (target.defending && target.shieldBlockRate > 0 && !isHammer)
+        {
+            int blockRoll = Random.Range(1, 101);
+            if (blockRoll <= target.shieldBlockRate)
+            {
+                Debug.Log($"{target.displayName} のシールドがブロック成功（出目 {blockRoll} ≤ {target.shieldBlockRate}%）→ ダメージ無効");
+
+                // カウンターシールド：軽減後ダメージの一部を反射
+                if (target.hasCounterShield)
+                {
+                    bool melee = attacker.weaponRange <= 2;
+                    int reflect = Mathf.RoundToInt(
+                        damage * (melee ? 0.75f : 0.5f));
+                    if (reflect > 0)
+                    {
+                        attacker.hp -= reflect;
+                        Debug.Log($"カウンターシールドの反射！ {attacker.displayName} に {reflect} ダメージ（残りHP {Mathf.Max(attacker.hp, 0)}）");
+                        if (attacker.hp <= 0)
+                        {
+                            Debug.Log($"{attacker.displayName} を撃破！");
+                            attacker.gameObject.SetActive(false);
+                            int credit = OtherTeam(attacker.team);
+                            score[credit] += 2;
+                            Debug.Log($"チーム{credit} +2点（スコア {score[1]} - {score[2]}）");
+                        }
+                    }
+                }
+                return;
+            }
+            Debug.Log($"{target.displayName} のブロック失敗（出目 {blockRoll} > {target.shieldBlockRate}%）");
+        }
+
+        target.hp -= damage;
+        Debug.Log($"{target.displayName} に {damage} ダメージ（残りHP {Mathf.Max(target.hp, 0)}）");
+
+        // 状態異常の付与（ダメージが通って、対象が生き残った場合のみ）
+        if (target.hp > 0)
+        {
+            if (HasItem(attacker, "毒付与") && !target.poisoned)
+            {
+                target.poisoned = true;
+                target.poisonSourceTeam = attacker.team;
+                Debug.Log($"{target.displayName} は毒状態になった！");
+            }
+            if (HasItem(attacker, "ビーコン弾") && !target.beaconed)
+            {
+                target.beaconed = true;
+                Debug.Log($"{target.displayName} にビーコンが付着した！（壁抜き等の効果は情報戦ステップで実装）");
+            }
+        }
+
+        if (target.hp <= 0)
+        {
+            Debug.Log($"{target.displayName} を撃破！");
+            target.gameObject.SetActive(false);
+            int credit = OtherTeam(target.team);
+            score[credit] += 2;
+            Debug.Log($"チーム{credit} +2点（スコア {score[1]} - {score[2]}）");
+        }
+    }
+
+    // グレネードランチャー：地点指定の範囲攻撃＋着弾点の地形破壊
+    void ResolveGrenade(Unit attacker, Vector2Int targetCell,
+                        int radius, int terrainMult)
+    {
+        // 命中判定（相手の敏捷性は使わない）
+        int hitRate = Mathf.Clamp(
+            Mathf.RoundToInt(70f + (attacker.precision - 50) / 2f
+                + (attacker.movedThisTurn ? 0 : 10)),
+            5, 95);
+        int roll = Random.Range(1, 101);
+        Vector2Int impact = targetCell;
+        if (roll <= hitRate)
+        {
+            Debug.Log($"{attacker.displayName} のグレネード！ 命中率 {hitRate}% → 出目 {roll} で命中（着弾点 {impact}）");
+        }
+        else
+        {
+            // 散布：上下左右・斜めのランダムな1マスへずれる（マップ外なら元のマス）
+            var dirs = new Vector2Int[]
+            {
+                new(1, 0), new(-1, 0), new(0, 1), new(0, -1),
+                new(1, 1), new(1, -1), new(-1, 1), new(-1, -1),
+            };
+            Vector2Int shifted = targetCell
+                + dirs[Random.Range(0, dirs.Length)];
+            if (Inside(shifted)) impact = shifted;
+            Debug.Log($"{attacker.displayName} のグレネード！ 命中率 {hitRate}% → 出目 {roll} で外れ、着弾点が {impact} にずれた");
+        }
+
+        // 迎撃判定：防御指示中の敵射撃ユニットが着弾点を射程に捉えていれば、
+        // 精密÷4 %で撃ち落とす（1人でも成功すれば攻撃全体が無効）
+        var interceptors = new List<Unit>();
+        foreach (Unit d in FindObjectsByType<Unit>())
+        {
+            if (d.team == attacker.team) continue;
+            if (!d.defending) continue;
+            if (d.weaponRange < 3) continue;
+            if (Vector2.Distance(d.cell, impact) > d.weaponRange) continue;
+            interceptors.Add(d);
+        }
+        interceptors.Sort((a, b) => b.precision.CompareTo(a.precision));
+        foreach (Unit d in interceptors)
+        {
+            int interceptRate = d.precision / 4;
+            int iroll = Random.Range(1, 101);
+            if (iroll <= interceptRate)
+            {
+                Debug.Log($"{d.displayName} がグレネードを撃ち落とした！（迎撃率 {interceptRate}% → 出目 {iroll}）攻撃は無効になった");
+                attacker.hasAttacked = true;
+                CheckWin();
+                return;
+            }
+            Debug.Log($"{d.displayName} の迎撃は失敗（迎撃率 {interceptRate}% → 出目 {iroll}）");
+        }
+
+        // 範囲ダメージ：実際の着弾点から半径内の全ユニット（敵味方問わず）
+        // 着弾点のマスは通常ダメージ、周囲のマスは半減
+        var victims = new List<Unit>();
+        foreach (Unit u in FindObjectsByType<Unit>())
+        {
+            if (Vector2.Distance(impact, u.cell) <= radius)
+                victims.Add(u);
+        }
+        foreach (Unit v in victims)
+        {
+            if (!v.gameObject.activeSelf) continue;
+            float mult = v.cell == impact ? 1f : 0.5f;
+            ApplyHitDamage(attacker, v, false, mult);
+        }
+
+        // 地形破壊：実際の着弾点のみ（地形へのダメージは防御0で計算）
+        if (terrain != null)
+        {
+            int terrainDamage = Mathf.RoundToInt(
+                (attacker.attack + attacker.weaponPower) / 2f) * terrainMult;
+            TerrainType destroyed = terrain.DamageTerrain(impact, terrainDamage);
+            if (destroyed == TerrainType.Wall)
+            {
+                Debug.Log($"着弾点 {impact} の壁が破壊された（焦土になった）");
+            }
+            else if (destroyed == TerrainType.Bridge)
+            {
+                Debug.Log($"着弾点 {impact} の橋が破壊された！");
+                nexusCells.Remove(impact); // 壊れた橋はネクサスでなくなる
+                Unit onBridge = FindUnitAt(impact);
+                if (onBridge != null) HandleBridgeFall(attacker, onBridge);
+            }
+            else if (terrain.GetTerrain(impact) == TerrainType.Wall
+                     || terrain.GetTerrain(impact) == TerrainType.Bridge)
+            {
+                Debug.Log($"着弾点 {impact} の地形に {terrainDamage} ダメージ（残り耐久 {terrain.GetTerrainHp(impact)}）");
+            }
+        }
+
+        attacker.hasAttacked = true;
+        CheckWin();
+    }
+
+    // 橋が破壊されたとき：上にいたユニットは固定20ダメージ＋最寄りの通行可能マスへ押し出し
+    void HandleBridgeFall(Unit attacker, Unit unit)
+    {
+        unit.hp -= 20;
+        Debug.Log($"{unit.displayName} は橋の崩落で20ダメージ（残りHP {Mathf.Max(unit.hp, 0)}）");
+        if (unit.hp <= 0)
+        {
+            Debug.Log($"{unit.displayName} を撃破！");
+            unit.gameObject.SetActive(false);
+            int credit = OtherTeam(unit.team);
+            score[credit] += 2;
+            Debug.Log($"チーム{credit} +2点（スコア {score[1]} - {score[2]}）");
+            CheckWin();
+            return;
+        }
+
+        // 最寄りの通行可能マスを探す（同心状に距離1,2,3...と広げる）
+        for (int r = 1; r <= 4; r++)
+        {
+            var candidates = new List<Vector2Int>();
+            for (int dx = -r; dx <= r; dx++)
+            {
+                for (int dy = -r; dy <= r; dy++)
+                {
+                    if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) != r) continue;
+                    Vector2Int c = unit.cell + new Vector2Int(dx, dy);
+                    if (!Inside(c)) continue;
+                    if (terrain != null && !terrain.IsPassable(c)) continue;
+                    if (FindUnitAt(c) != null) continue;
+                    candidates.Add(c);
+                }
+            }
+            if (candidates.Count > 0)
+            {
+                Vector2Int dest = candidates[Random.Range(0, candidates.Count)];
+                Debug.Log($"{unit.displayName} は {dest} へ押し出された");
+                unit.cell = dest;
+                unit.SnapToCell();
+                return;
+            }
+        }
+        Debug.Log($"{unit.displayName} の押し出し先がなかった（その場に留まる）");
     }
 
     void Select(Unit u)
