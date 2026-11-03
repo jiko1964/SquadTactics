@@ -17,6 +17,7 @@ public class HudController : MonoBehaviour
     [Header("テキスト")]
     public TextMeshProUGUI detailText;
     public TextMeshProUGUI logText;
+    public TextMeshProUGUI scoreText; // 右上のスコア表示（任意）
     [Header("参照（空欄なら自動で探す）")]
     public GameController game;
 
@@ -92,6 +93,8 @@ public class HudController : MonoBehaviour
         RefreshCards(team1Cards, team1Units);
         RefreshCards(team2Cards, team2Units);
         RefreshDetail();
+        if (scoreText != null && game != null)
+            scoreText.text = $"チーム1 {game.GetScore(1)} － {game.GetScore(2)} チーム2";
     }
 
     void RefreshCards(Button[] cards, Unit[] units)

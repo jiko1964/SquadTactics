@@ -50,6 +50,8 @@ public class GameController : MonoBehaviour
     private readonly Dictionary<Unit, Order> orders = new();
 
     public int turnNumber = 1;
+    public int cpuTeam = 0; // CPU対戦：0=無効（ホットシート）、1/2=そのチームを簡易AIが操作
+    private bool aiOrdered = false;
     private Phase phase = Phase.Orders;
     private bool gameOver = false;
     private readonly int[] score = new int[3];
@@ -164,6 +166,30 @@ public class GameController : MonoBehaviour
     void Update()
     {
         if (gameOver) return;
+
+        // 【CPU対戦】指示フェイズの最初に、CPUチームの指示を自動生成する
+        if (phase == Phase.Orders && cpuTeam != 0 && !aiOrdered)
+        {
+            aiOrdered = true;
+            GenerateAiOrders(cpuTeam);
+        }
+
+        // 【CPU対戦】解決中の一時停止は、CPU側の分を自動で判断する
+        if (phase == Phase.Resolution && cpuTeam != 0)
+        {
+            if (currentDrone != null && currentDrone.controller != null
+                && currentDrone.controller.team == cpuTeam)
+            {
+                AiDroneAct();
+                return;
+            }
+            if (currentAttacker != null && currentAttacker.team == cpuTeam
+                && pauseKind != PauseKind.None)
+            {
+                AiResolvePause();
+                return;
+            }
+        }
 
         var kb = Keyboard.current;
 
@@ -1412,6 +1438,7 @@ public class GameController : MonoBehaviour
 
         orders.Clear();
         droneOrders.Clear();
+        aiOrdered = false;
         firstHitBy.Clear();
         linkageUsedTeams.Clear();
 
@@ -1493,19 +1520,39 @@ public class GameController : MonoBehaviour
     // ターン終了処理：ネクサスマスに止まっている陣営に1点（1ターン1点まで、1試合3点まで）
     void ApplyNexusScoring()
     {
-        for (int team = 1; team <= 2; team++)
+        // ネクサス得点は2ターン目から（1ターン目に速いユニットが先行して得点するのを防ぐ）
+        if (turnNumber < 2) return;
+
+        // 両軍の保持状況を先に調べる（両軍が乗っていたら、そのターンは両軍とも得点なし）
+        Unit holder1 = FindNexusHolder(1);
+        Unit holder2 = FindNexusHolder(2);
+        if (holder1 != null && holder2 != null)
         {
-            if (nexusScored[team] >= 3) continue;
-            foreach (Unit u in FindObjectsByType<Unit>())
-            {
-                if (u.team != team) continue;
-                if (!nexusCells.Contains(u.cell)) continue;
-                score[team] += 1;
-                nexusScored[team]++;
-                Debug.Log($"{u.displayName} がネクサスを保持：チーム{team} +1点（ネクサス通算 {nexusScored[team]}/3、スコア {score[1]} - {score[2]}）");
-                break;
-            }
+            Debug.Log("ネクサスは両軍が保持しているため、このターンはどちらも得点なし");
+            return;
         }
+        AwardNexus(1, holder1);
+        AwardNexus(2, holder2);
+    }
+
+    // そのチームでネクサスマスに止まっているユニット（いなければ null）
+    Unit FindNexusHolder(int team)
+    {
+        foreach (Unit u in FindObjectsByType<Unit>())
+        {
+            if (u.team != team) continue;
+            if (nexusCells.Contains(u.cell)) return u;
+        }
+        return null;
+    }
+
+    void AwardNexus(int team, Unit holder)
+    {
+        if (holder == null) return;
+        if (nexusScored[team] >= 3) return; // 通算上限3点
+        score[team] += 1;
+        nexusScored[team]++;
+        Debug.Log($"{holder.displayName} がネクサスを保持：チーム{team} +1点（ネクサス通算 {nexusScored[team]}/3、スコア {score[1]} - {score[2]}）");
     }
 
     bool AnyEnemyInRange(Unit unit, Vector2Int origin)
@@ -2843,8 +2890,227 @@ public class GameController : MonoBehaviour
     }
 
 
+    // ===== 簡易AI（CPU対戦） =====
+
+    // CPUチームの全ユニット分の指示を自動生成し、準備完了にする
+    void GenerateAiOrders(int team)
+    {
+        foreach (Unit u in FindObjectsByType<Unit>())
+        {
+            if (u.team != team || !u.gameObject.activeSelf) continue;
+            Order o = GetOrder(u);
+            o.moveCell = ChooseAiMove(u, out bool canAttack);
+            o.prepared = canAttack ? PreparedAction.Attack : PreparedAction.Defend;
+            if (o.moveCell.HasValue) PlaceMarker(o, o.moveCell.Value);
+            else ClearMarker(o);
+            SetMarkerColor(o, o.prepared);
+            Debug.Log($"CPU指示：{u.displayName} は {(o.moveCell.HasValue ? o.moveCell.Value + " へ移動" : "移動なし")}＋{(canAttack ? "攻撃準備" : "防御準備")}");
+        }
+        foreach (var d in drones)
+        {
+            if (d.controller != null && d.controller.team == team && DroneUsable(d))
+                droneOrders[d] = ChooseAiDroneMove(d);
+        }
+        Debug.Log($"CPU：チーム{team} の指示がそろいました");
+        ReadyTeam(team);
+    }
+
+    // 最も近い敵（生存）を返す。いなければ null
+    Unit NearestEnemy(Unit u, Vector2Int from)
+    {
+        Unit best = null;
+        float bestDist = float.MaxValue;
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == u.team || !e.gameObject.activeSelf) continue;
+            float dist = Vector2.Distance(from, e.cell);
+            if (dist < bestDist) { bestDist = dist; best = e; }
+        }
+        return best;
+    }
+
+    // 移動先を決める：攻撃できるマスを優先して前進。HPが3割以下なら敵から遠ざかる（行動は防御）
+    Vector2Int? ChooseAiMove(Unit u, out bool canAttack)
+    {
+        canAttack = false;
+        Unit nearest = NearestEnemy(u, u.cell);
+        if (nearest == null) return null;
+        bool lowHp = u.hp * 100 <= u.maxHp * 30;
+        int range = u.MoveTiles;
+        Vector2Int best = u.cell;
+        float bestScore = float.MaxValue;
+        bool bestAttack = false;
+        for (int dx = -range; dx <= range; dx++)
+        {
+            for (int dy = -range; dy <= range; dy++)
+            {
+                Vector2Int c = u.cell + new Vector2Int(dx, dy);
+                if (!Inside(c)) continue;
+                if (Vector2.Distance(u.cell, c) > range + 0.001f) continue;
+                if (terrain != null && !terrain.IsPassable(c)) continue;
+                Unit occ = FindUnitAt(c);
+                if (occ != null && occ.team != u.team) continue; // 敵のいるマスには進めない
+                float distE = Vector2.Distance(c, nearest.cell);
+                bool atk = !lowHp && AiCanAttackFrom(u, c, nearest);
+                float score = lowHp ? -distE : distE - (atk ? 100f : 0f);
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    best = c;
+                    bestAttack = atk;
+                }
+            }
+        }
+        canAttack = bestAttack;
+        return best == u.cell ? null : best;
+    }
+
+    // そのマスから攻撃が届くか（グレネードは地点指定なので最も近い敵までの距離で判定）
+    bool AiCanAttackFrom(Unit u, Vector2Int from, Unit nearest)
+    {
+        if (IsGrenadeUser(u))
+            return Vector2.Distance(from, nearest.cell) <= u.weaponRange;
+        return AnyTargetableEnemy(u, from);
+    }
+
+    // ドローンの移動先：最も近い敵へ近づく（射程2マスに入っていれば留まる）
+    Vector2Int ChooseAiDroneMove(DroneInfo d)
+    {
+        Unit nearest = null;
+        float bestDist = float.MaxValue;
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == d.team || !e.gameObject.activeSelf) continue;
+            float dist = Vector2.Distance(d.cell, e.cell);
+            if (dist < bestDist) { bestDist = dist; nearest = e; }
+        }
+        if (nearest == null || bestDist <= 2f) return d.cell;
+        Vector2Int best = d.cell;
+        float bestScore = float.MaxValue;
+        for (int dx = -4; dx <= 4; dx++)
+        {
+            for (int dy = -4; dy <= 4; dy++)
+            {
+                Vector2Int c = d.cell + new Vector2Int(dx, dy);
+                if (!Inside(c)) continue;
+                if (Vector2.Distance(d.cell, c) > 4.001f) continue;
+                if (terrain != null && !terrain.IsPassable(c)) continue;
+                if (FindUnitAt(c) != null) continue;
+                DroneInfo occD = FindDroneAt(c);
+                if (occD != null && occD != d) continue;
+                float score = Vector2.Distance(c, nearest.cell);
+                if (score < bestScore) { bestScore = score; best = c; }
+            }
+        }
+        return best;
+    }
+
+    // 解決中の一時停止を、CPUユニットの代わりに判断する（クリック処理をそのまま使う）
+    void AiResolvePause()
+    {
+        Unit u = currentAttacker;
+        switch (pauseKind)
+        {
+            case PauseKind.Attack:
+                {
+                    Unit target = AiPickAttackTarget(u);
+                    if (target != null)
+                    {
+                        HandleResolutionClick(target, target.cell);
+                        return;
+                    }
+                    DroneInfo droneTarget = AiPickDroneTarget(u);
+                    if (droneTarget != null)
+                    {
+                        HandleResolutionClick(null, droneTarget.cell);
+                        return;
+                    }
+                    HandleResolutionClick(null, new Vector2Int(-1, -1)); // 対象なし＝攻撃しない
+                    return;
+                }
+            case PauseKind.Grenade:
+                {
+                    HandleResolutionClick(null, AiPickGrenadeCell(u));
+                    return;
+                }
+            default:
+                // 簡易AIは特殊装備・ULTを使わないため、通常はここに来ない
+                Debug.Log($"CPU：{u.displayName} は行動をキャンセルした");
+                EndAttackSelection();
+                return;
+        }
+    }
+
+    // 攻撃対象：射程・目視が有効な敵のうち、最もHPの低いもの
+    Unit AiPickAttackTarget(Unit u)
+    {
+        Unit best = null;
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == u.team || !e.gameObject.activeSelf) continue;
+            if (!attackable.Contains(e.cell)) continue;
+            if (!CanSee(u, e)) continue;
+            if (best == null || e.hp < best.hp) best = e;
+        }
+        return best;
+    }
+
+    // 攻撃対象（ドローン）：ユニットの対象がいない場合の予備
+    DroneInfo AiPickDroneTarget(Unit u)
+    {
+        foreach (var d in drones)
+        {
+            if (d.team == u.team || d.disabled) continue;
+            if (!attackable.Contains(d.cell)) continue;
+            if (CanTargetDrone(u, d)) return d;
+        }
+        return null;
+    }
+
+    // グレネードの着弾点：爆風で敵を巻き込めるマス（味方を巻き込むマスは避ける）。なければ範囲外を返して撃たない
+    Vector2Int AiPickGrenadeCell(Unit u)
+    {
+        Vector2Int best = new Vector2Int(-1, -1);
+        int bestScore = 0;
+        foreach (var cell in attackable)
+        {
+            int score = 0;
+            foreach (Unit e in FindObjectsByType<Unit>())
+            {
+                if (!e.gameObject.activeSelf) continue;
+                if (Vector2.Distance(cell, e.cell) > pauseGrenadeRadius + 0.001f) continue;
+                score += e.team != u.team ? 2 : -3;
+            }
+            if (score > bestScore) { bestScore = score; best = cell; }
+        }
+        return best;
+    }
+
+    // CPUドローンの攻撃対象を判断する（対象がいなければ攻撃しない）
+    void AiDroneAct()
+    {
+        DroneInfo d = currentDrone;
+        Unit best = null;
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == d.team || !e.gameObject.activeSelf) continue;
+            if (Vector2.Distance(d.cell, e.cell) > 2f) continue;
+            if (!CanDroneTarget(d, e)) continue;
+            if (best == null || e.hp < best.hp) best = e;
+        }
+        if (best != null) HandleResolutionClick(best, best.cell);
+        else
+        {
+            Debug.Log($"{DroneName(d)} は攻撃しない");
+            EndDronePause();
+        }
+    }
+
     // ===== HUD連携（HudControllerから使う公開API） =====
     public Unit SelectedUnit => selected;
+
+    // チームの現在スコア（HUD表示用）
+    public int GetScore(int team) => score[team];
 
     // HUDのユニットカードをクリックしたとき（盤面でユニットをクリックして選び直すのと同じ扱い）
     public void HudSelect(Unit u)
