@@ -146,7 +146,7 @@ public class HudController : MonoBehaviour
         }
 
         string weapon = u.weapon != null
-            ? $"射程{u.weaponRange} 威力{u.weaponPower} 命中{u.weaponAccuracy}"
+            ? $"{WeaponName(u)}（射程{u.weaponRange} 威力{u.weaponPower} 命中{u.weaponAccuracy}）"
             : "なし";
         string ult = u.data != null ? u.data.ultName : "―";
         string equip = "なし";
@@ -172,5 +172,25 @@ public class HudController : MonoBehaviour
             $"装備：{equip}\n" +
             $"状態：{state}" +
             (order != "" ? $"\n指示：{order}" : "");
+    }
+
+    // 武器アセット名 → 表示名（ルールブックの表記）
+    string WeaponName(Unit u)
+    {
+        if (u.weapon == null) return "なし";
+        switch (u.weapon.name)
+        {
+            case "W_Knife": return "ナイフ";
+            case "W_Hammer": return "ハンマー";
+            case "W_Blade": return "ブレード";
+            case "W_Handgun": return "ハンドガン";
+            case "W_AR": return "アサルトライフル";
+            case "W_Shotgun": return "ショットガン";
+            case "W_Sniper1": return "スナイパーライフル①命中特化";
+            case "W_Sniper2": return "スナイパーライフル②標準";
+            case "W_Sniper3": return "スナイパーライフル③火力特化";
+            case "W_Grenade": return "グレネードランチャー";
+            default: return u.weapon.name;
+        }
     }
 }

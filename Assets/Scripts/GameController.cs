@@ -28,7 +28,7 @@ public class GameController : MonoBehaviour
     {
         None, Attack, KaedeMove, KaedeAttack, YukiSnipe, SakuraHeal, Grenade,
         TrapPlace, SmokePlace, DroneAttack, HackTarget, DroneDummyTarget,
-        HackChoice, DroneCreateType, DronePlace
+        HackChoice, DroneCreateType, DronePlace, MedicalTarget
     }
 
     // 1体分の指示：移動先＋準備行動
@@ -459,7 +459,7 @@ public class GameController : MonoBehaviour
                     && attackable.Contains(cell)
                     && CanSee(currentAttacker, clicked))
                 {
-                    Attack(currentAttacker, clicked);
+                    Attack(currentAttacker, clicked, false, 1f, false);
                     ultAttacksLeft--;
                     if (!gameOver
                         && currentAttacker.gameObject.activeSelf
@@ -499,7 +499,7 @@ public class GameController : MonoBehaviour
                     && attackable.Contains(cell)
                     && CanSee(currentAttacker, clicked))
                 {
-                    Attack(currentAttacker, clicked, true, 1.5f);
+                    Attack(currentAttacker, clicked, true, 1.5f, false);
                 }
                 else if (clicked != null && clicked.team != currentAttacker.team
                          && attackable.Contains(cell))
@@ -521,6 +521,19 @@ public class GameController : MonoBehaviour
                 else
                 {
                     Debug.Log($"{currentAttacker.displayName} は緊急治療を使わなかった（EXは消費済み）");
+                }
+                EndAttackSelection();
+                return;
+
+            case PauseKind.MedicalTarget:
+                if (clicked != null && clicked.team == currentAttacker.team
+                    && Vector2.Distance(currentAttacker.cell, clicked.cell) <= 2f)
+                {
+                    HealWithKit(currentAttacker, clicked);
+                }
+                else
+                {
+                    Debug.Log($"{currentAttacker.displayName} はメディカルキットを使わなかった（使用回数は消費しない）");
                 }
                 EndAttackSelection();
                 return;
@@ -914,8 +927,11 @@ public class GameController : MonoBehaviour
             if (o != null && o.moveCell.HasValue && o.moveCell.Value != u.cell)
             {
                 Vector2Int dest = o.moveCell.Value;
-                // 到着先が塞がれていたら、来た方向の手前の空きマスで止まる
-                Vector2Int stop = FindStopCell(u.cell, dest, false, null);
+                // 経路に沿って移動。到着先が塞がれていたら経路の手前の空きマスで止まる
+                var moveParent = new Dictionary<Vector2Int, Vector2Int>();
+                var moveReach = ReachableForUnit(u, u.cell, u.MoveTiles, moveParent);
+                Vector2Int stop = FindPathStop(u.cell, dest, moveReach, moveParent,
+                    c => StoppableCell(c, false, null));
                 if (stop != u.cell)
                 {
                     u.cell = stop;
@@ -1250,6 +1266,18 @@ public class GameController : MonoBehaviour
         Debug.Log($"{healer.displayName} のULT「緊急治療」：{target.displayName} のHP {before} → {target.hp}{(cured ? "、状態異常をすべて解除" : "")}");
     }
 
+    // メディカルキット：HP25回復＋毒解除（使用回数を1消費）
+    void HealWithKit(Unit user, Unit target)
+    {
+        user.medicalUsesLeft--;
+        int before = target.hp;
+        target.hp = Mathf.Min(target.maxHp, target.hp + 25);
+        bool cured = target.poisoned;
+        target.poisoned = false;
+        if (cured) target.poisonSourceTeam = 0;
+        Debug.Log($"{user.displayName} のメディカルキット：{target.displayName} のHP {before} → {target.hp}{(cured ? "、毒を解除" : "")}（残り使用回数 {user.medicalUsesLeft}）");
+    }
+
     // そのユニットが、いま使用できる特殊装備の一覧（ビーコン時は切除も含む）
     List<string> BuildSpecialOptions(Unit u)
     {
@@ -1301,7 +1329,8 @@ public class GameController : MonoBehaviour
                 var o = GetOrder(u);
                 Vector2Int from = o.moveCell ?? u.cell;
                 return AnyEnemyDroneWithin(u.team, from, 3);
-            default: return true; // メディカルキット等（効果は未実装）
+            case "メディカルキット": return u.medicalUsesLeft > 0;
+            default: return true;
         }
     }
 
@@ -1310,6 +1339,16 @@ public class GameController : MonoBehaviour
     {
         switch (choice)
         {
+            case "メディカルキット": // 半径2マス以内の味方1人を回復25＋毒解除（1試合3回まで）
+                if (u.medicalUsesLeft <= 0)
+                {
+                    Debug.Log($"{u.displayName} のメディカルキット：使用回数を使い切っているため、何もしなかった");
+                    return false;
+                }
+                ShowRadiusFrom(u.cell, 2, new Color(0.5f, 1f, 0.6f, 0.35f));
+                BeginPause(u, PauseKind.MedicalTarget);
+                Debug.Log($"{u.displayName} のメディカルキット：半径2マス以内の味方を選んでください（残り使用回数 {u.medicalUsesLeft}）");
+                return true;
             case "切除": // ビーコン切除：自傷5ダメージでビーコンを外す
                 if (!u.beaconed)
                 {
@@ -1549,10 +1588,10 @@ public class GameController : MonoBehaviour
     void AwardNexus(int team, Unit holder)
     {
         if (holder == null) return;
-        if (nexusScored[team] >= 3) return; // 通算上限3点
+        if (nexusScored[team] >= 2) return; // 通算上限2点
         score[team] += 1;
         nexusScored[team]++;
-        Debug.Log($"{holder.displayName} がネクサスを保持：チーム{team} +1点（ネクサス通算 {nexusScored[team]}/3、スコア {score[1]} - {score[2]}）");
+        Debug.Log($"{holder.displayName} がネクサスを保持：チーム{team} +1点（ネクサス通算 {nexusScored[team]}/2、スコア {score[1]} - {score[2]}）");
     }
 
     bool AnyEnemyInRange(Unit unit, Vector2Int origin)
@@ -1739,22 +1778,17 @@ public class GameController : MonoBehaviour
     {
         ClearHighlights();
         movable.Clear();
-        for (int dx = -4; dx <= 4; dx++)
+        var reach = ReachableForDrone(d);
+        foreach (var kv in reach)
         {
-            for (int dy = -4; dy <= 4; dy++)
+            Vector2Int c = kv.Key;
+            if (c != d.cell)
             {
-                Vector2Int c = d.cell + new Vector2Int(dx, dy);
-                if (!Inside(c)) continue;
-                if (Vector2.Distance(d.cell, c) > 4f) continue;
-                if (c != d.cell)
-                {
-                    if (terrain != null && !terrain.IsPassable(c)) continue;
-                    if (FindUnitAt(c) != null) continue;
-                    if (FindDroneAt(c) != null) continue;
-                }
-                movable.Add(c);
-                AddHighlight(c, new Color(0.4f, 0.8f, 1f, 0.3f));
+                if (FindUnitAt(c) != null) continue;
+                if (FindDroneAt(c) != null) continue;
             }
+            movable.Add(c);
+            AddHighlight(c, new Color(0.4f, 0.8f, 1f, 0.3f));
         }
     }
 
@@ -1777,7 +1811,10 @@ public class GameController : MonoBehaviour
         // 移動（4マスまで。到着先が塞がれていたら手前の空きマスで止まる）
         if (dest != d.cell)
         {
-            Vector2Int stop = FindStopCell(d.cell, dest, true, d);
+            var droneParent = new Dictionary<Vector2Int, Vector2Int>();
+            var droneReach = ReachableForDrone(d, droneParent);
+            Vector2Int stop = FindPathStop(d.cell, dest, droneReach, droneParent,
+                c => StoppableCell(c, true, d));
             if (stop == d.cell)
             {
                 Debug.Log($"{DroneName(d)} の移動は失敗（到着先が塞がれていて進めなかった）");
@@ -1967,6 +2004,13 @@ public class GameController : MonoBehaviour
                 return;
             }
             Debug.Log($"{target.displayName} のシールドブロック失敗（率 {target.shieldBlockRate}%、出目 {blockRoll}）");
+        }
+
+        // 防御準備中：受けるダメージを20%軽減（ブロック・鉄壁とは別に適用）
+        if (target.defending)
+        {
+            damage = Mathf.Max(1, Mathf.RoundToInt(damage * 0.8f));
+            Debug.Log($"{target.displayName} は防御態勢でダメージを軽減 → {damage}");
         }
 
         target.hp -= damage;
@@ -2482,8 +2526,15 @@ public class GameController : MonoBehaviour
     }
 
     void Attack(Unit attacker, Unit target,
-                bool guaranteedHit = false, float damageMultiplier = 1f)
+                bool guaranteedHit = false, float damageMultiplier = 1f,
+                bool camoBonusEligible = true)
     {
+        // 光学迷彩からの奇襲：迷彩中の通常攻撃は命中+10%・ダメージ+10%
+        // （迷彩は攻撃で解除されるため、RevealAttacker の前に判定する。
+        //   ULT攻撃は呼び出し側で対象外にし、連携追撃・範囲攻撃には適用されない）
+        bool camoAmbush = camoBonusEligible && attacker.camouflaged;
+        if (camoAmbush)
+            Debug.Log($"{attacker.displayName} の光学迷彩からの奇襲！（命中+10%・ダメージ+10%）");
         RevealAttacker(attacker);
 
         // フレンドリーファイア：射撃武器（射程3以上）で、対象との間に
@@ -2508,6 +2559,7 @@ public class GameController : MonoBehaviour
                 }
             }
         }
+        if (friendlyFire) camoAmbush = false; // 誤射に奇襲補正は乗らない
 
         // 鉄壁：半径2マス以内の味方への攻撃をゴウが引き受ける
         if (!friendlyFire)
@@ -2524,10 +2576,31 @@ public class GameController : MonoBehaviour
         bool isHammer = attacker.weapon != null
                         && attacker.weapon.name == "W_Hammer";
 
+        // 武器ごとの距離補正と追尾弾（ルールブック6.4・6.5）
+        float distToTarget = Vector2.Distance(attacker.cell, target.cell);
+        bool homing = attacker.hasHoming;
+        int distHitAdj = 0;
+        int shotgunPowerAdj = 0;
+        if (attacker.weapon != null)
+        {
+            if (attacker.weapon.name.StartsWith("W_Sniper") && distToTarget <= 2f)
+                distHitAdj -= 20; // スナイパーライフル：至近距離（1〜2マス）命中−20%
+            if (attacker.weapon.name == "W_Handgun" && distToTarget < 1.5f)
+                distHitAdj += 10; // ハンドガン：距離1マスで命中+10%
+            if (attacker.weapon.name == "W_Shotgun")
+            {
+                if (distToTarget < 1.5f) shotgunPowerAdj = 10;       // 距離1マスで威力+10
+                else if (distToTarget > 2.5f) shotgunPowerAdj = -5;  // 距離3マスで威力−5
+            }
+        }
+
         int hitRate = Mathf.Clamp(
             Mathf.RoundToInt(attacker.weaponAccuracy
                 + (attacker.precision - target.agility) / 2f
-                + (attacker.movedThisTurn ? 0 : 10)),
+                + (attacker.movedThisTurn ? 0 : 10)
+                + (camoAmbush ? 10 : 0)
+                + (homing ? 10 : 0)
+                + distHitAdj),
             5, 95);
 
         bool hit;
@@ -2545,7 +2618,18 @@ public class GameController : MonoBehaviour
                 : $"{attacker.displayName} の攻撃！ 命中率 {hitRate}% → 出目 {roll} で 外れ");
         }
 
-        if (hit) ApplyHitDamage(attacker, target, isHammer, damageMultiplier);
+        // 追尾弾：回避されても追尾してもう1回だけ攻撃判定を行う
+        if (!hit && homing)
+        {
+            int reroll = Random.Range(1, 101);
+            hit = reroll <= hitRate;
+            Debug.Log(hit
+                ? $"追尾弾が追尾した！ 再判定（命中率 {hitRate}%）→ 出目 {reroll} で命中"
+                : $"追尾弾の再判定（命中率 {hitRate}%）→ 出目 {reroll} で外れ");
+        }
+
+        if (hit) ApplyHitDamage(attacker, target, isHammer,
+            damageMultiplier * (camoAmbush ? 1.1f : 1f), true, shotgunPowerAdj);
         attacker.hasAttacked = true;
         CheckWin();
     }
@@ -2557,14 +2641,15 @@ public class GameController : MonoBehaviour
     // 　（通常の単体攻撃のみtrue。範囲攻撃と連携追撃そのものはfalse）
     void ApplyHitDamage(Unit attacker, Unit target, bool isHammer,
                         float damageMultiplier = 1f,
-                        bool countsForLinkage = true)
+                        bool countsForLinkage = true,
+                        int powerBonus = 0)
     {
         int defBonus = target.armorBonus
                        - (isHammer ? target.shieldBonus : 0);
         if (isHammer && (target.shieldBonus > 0 || target.shieldBlockRate > 0))
             Debug.Log("ハンマーはシールドの防御補正とブロックを無視");
 
-        float raw = (attacker.attack + attacker.weaponPower) / 2f
+        float raw = (attacker.attack + attacker.weaponPower + powerBonus) / 2f
                     * 100f / (100 + target.defense + defBonus);
         if (!attacker.movedThisTurn) raw *= 1.1f;
         raw *= damageMultiplier;
@@ -2608,6 +2693,13 @@ public class GameController : MonoBehaviour
                 return;
             }
             Debug.Log($"{target.displayName} のブロック失敗（出目 {blockRoll} > {target.shieldBlockRate}%）");
+        }
+
+        // 防御準備中：受けるダメージを20%軽減（ブロック・鉄壁とは別に適用）
+        if (target.defending)
+        {
+            damage = Mathf.Max(1, Mathf.RoundToInt(damage * 0.8f));
+            Debug.Log($"{target.displayName} は防御態勢でダメージを軽減 → {damage}");
         }
 
         target.hp -= damage;
@@ -2706,19 +2798,97 @@ public class GameController : MonoBehaviour
 
     // 到着先が塞がれている場合に、来た方向へ1マスずつ戻って
     // 止まれるマスを探す（見つからなければ出発マス＝その場に留まる）
-    Vector2Int FindStopCell(Vector2Int from, Vector2Int dest,
-                            bool dronesBlock, DroneInfo selfDrone)
+    // ---- 経路ベース移動（BFS） ----
+    // 8方向・1歩1コスト。斜めは両脇のマスが両方とも地形で塞がれている場合は通れない（角抜け禁止）
+    bool CornerBlocked(Vector2Int c)
     {
-        if (StoppableCell(dest, dronesBlock, selfDrone)) return dest;
-        Vector2Int c = dest;
-        while (c != from)
+        if (!Inside(c)) return true;
+        return terrain != null && !terrain.IsPassable(c);
+    }
+
+    Dictionary<Vector2Int, int> BfsCore(Vector2Int origin, int range,
+        System.Func<Vector2Int, bool> passable,
+        Dictionary<Vector2Int, Vector2Int> parent)
+    {
+        var cost = new Dictionary<Vector2Int, int> { [origin] = 0 };
+        var queue = new Queue<Vector2Int>();
+        queue.Enqueue(origin);
+        while (queue.Count > 0)
         {
-            c += new Vector2Int(
-                (int)Mathf.Sign(from.x - c.x),
-                (int)Mathf.Sign(from.y - c.y));
-            if (StoppableCell(c, dronesBlock, selfDrone)) return c;
+            Vector2Int c = queue.Dequeue();
+            int cc = cost[c];
+            if (cc >= range) continue;
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    Vector2Int n = c + new Vector2Int(dx, dy);
+                    if (!Inside(n) || cost.ContainsKey(n)) continue;
+                    if (!passable(n)) continue;
+                    if (dx != 0 && dy != 0
+                        && CornerBlocked(c + new Vector2Int(dx, 0))
+                        && CornerBlocked(c + new Vector2Int(0, dy)))
+                        continue; // 角抜け禁止
+                    cost[n] = cc + 1;
+                    if (parent != null) parent[n] = c;
+                    queue.Enqueue(n);
+                }
+            }
         }
-        return from;
+        return cost;
+    }
+
+    // ユニットの到達範囲：敵のいるマスは通れない。味方のマスは通過できる
+    // （目的地にも指定できるが、解決時に詰まっていたら経路の手前で止まる）
+    Dictionary<Vector2Int, int> ReachableForUnit(Unit u, Vector2Int origin, int range,
+        Dictionary<Vector2Int, Vector2Int> parent = null)
+    {
+        return BfsCore(origin, range, c =>
+        {
+            if (terrain != null && !terrain.IsPassable(c)) return false;
+            Unit occ = FindUnitAt(c);
+            return occ == null || occ == u || occ.team == u.team;
+        }, parent);
+    }
+
+    // ドローンの到達範囲（移動4マス）：地形のみで判定し、停止可否は StoppableCell で見る
+    Dictionary<Vector2Int, int> ReachableForDrone(DroneInfo d,
+        Dictionary<Vector2Int, Vector2Int> parent = null)
+    {
+        return BfsCore(d.cell, 4, c => terrain == null || terrain.IsPassable(c), parent);
+    }
+
+    // BFSの経路に沿った停止位置：目的地が詰まっていたら経路の手前の空きマスで止まり、
+    // 経路が塞がれて目的地に届かない場合は、到達範囲内で最も目的地に近いマスで止まる
+    Vector2Int FindPathStop(Vector2Int origin, Vector2Int dest,
+        Dictionary<Vector2Int, int> cost,
+        Dictionary<Vector2Int, Vector2Int> parent,
+        System.Func<Vector2Int, bool> stoppable)
+    {
+        if (cost.ContainsKey(dest))
+        {
+            Vector2Int c = dest;
+            while (c != origin && !stoppable(c))
+                c = parent[c];
+            return c;
+        }
+        Vector2Int best = origin;
+        float bestDist = Vector2.Distance(origin, dest);
+        int bestCost = 0;
+        foreach (var kv in cost)
+        {
+            if (kv.Key == origin || !stoppable(kv.Key)) continue;
+            float dd = Vector2.Distance(kv.Key, dest);
+            if (dd < bestDist - 0.001f
+                || (Mathf.Abs(dd - bestDist) <= 0.001f && kv.Value > bestCost))
+            {
+                best = kv.Key;
+                bestDist = dd;
+                bestCost = kv.Value;
+            }
+        }
+        return best;
     }
 
     bool StoppableCell(Vector2Int cell, bool dronesBlock, DroneInfo selfDrone)
@@ -2899,12 +3069,14 @@ public class GameController : MonoBehaviour
         {
             if (u.team != team || !u.gameObject.activeSelf) continue;
             Order o = GetOrder(u);
-            o.moveCell = ChooseAiMove(u, out bool canAttack);
-            o.prepared = canAttack ? PreparedAction.Attack : PreparedAction.Defend;
+            o.moveCell = ChooseAiMove(u, out bool canAttack, out string reason);
+            o.prepared = ChooseAiAction(u, o.moveCell ?? u.cell, canAttack, reason,
+                                        out string specialChoice);
+            o.specialChoice = specialChoice;
             if (o.moveCell.HasValue) PlaceMarker(o, o.moveCell.Value);
             else ClearMarker(o);
             SetMarkerColor(o, o.prepared);
-            Debug.Log($"CPU指示：{u.displayName} は {(o.moveCell.HasValue ? o.moveCell.Value + " へ移動" : "移動なし")}＋{(canAttack ? "攻撃準備" : "防御準備")}");
+            Debug.Log($"CPU指示：{u.displayName} は {OrderTextFor(u)}（{reason}）");
         }
         foreach (var d in drones)
         {
@@ -2929,39 +3101,99 @@ public class GameController : MonoBehaviour
         return best;
     }
 
-    // 移動先を決める：攻撃できるマスを優先して前進。HPが3割以下なら敵から遠ざかる（行動は防御）
-    Vector2Int? ChooseAiMove(Unit u, out bool canAttack)
+    // ネクサス担当か（そのチームの生存ユニットで最も移動力が高い1人。
+    // ネクサスの通算上限に達している場合と、他の味方がすでに保持している場合は担当を外れる）
+    bool IsNexusRunner(Unit u)
+    {
+        if (nexusScored[u.team] >= 2) return false;
+        foreach (Unit a in FindObjectsByType<Unit>())
+        {
+            if (a == u || a.team != u.team || !a.gameObject.activeSelf) continue;
+            if (a.MoveTiles > u.MoveTiles) return false;
+            if (nexusCells.Contains(a.cell)) return false; // 味方が保持中
+        }
+        return true;
+    }
+
+    // 移動先を決める。判断の理由も返す（ログ用）
+    // ・基本：攻撃できるマスを優先して、最も近い敵へ前進
+    // ・ネクサス担当：ネクサスへ向かい、乗ったら保持する
+    // ・HP3割以下：届く範囲に回復マスがあればそこへ後退。なければ、敵が遠い間は通常行動に戻り、近い時だけ後退する
+    // ※候補は経路ベース（BFS）で実際に到達できるマスだけ
+    Vector2Int? ChooseAiMove(Unit u, out bool canAttack, out string reason)
     {
         canAttack = false;
+        reason = "前進";
         Unit nearest = NearestEnemy(u, u.cell);
         if (nearest == null) return null;
         bool lowHp = u.hp * 100 <= u.maxHp * 30;
-        int range = u.MoveTiles;
+        bool runner = !lowHp && IsNexusRunner(u);
+
+        // ネクサス担当がすでにネクサス上にいるなら、そこを保持する
+        if (runner && nexusCells.Contains(u.cell))
+        {
+            canAttack = AiCanAttackFrom(u, u.cell, nearest);
+            reason = "ネクサス保持";
+            return null;
+        }
+
+        var reach = ReachableForUnit(u, u.cell, u.MoveTiles);
         Vector2Int best = u.cell;
         float bestScore = float.MaxValue;
         bool bestAttack = false;
-        for (int dx = -range; dx <= range; dx++)
+        string bestReason = "前進";
+        foreach (var kv in reach)
         {
-            for (int dy = -range; dy <= range; dy++)
+            Vector2Int c = kv.Key;
+            float distE = Vector2.Distance(c, nearest.cell);
+
+            // HP低下時：回復マスに止まれるなら最優先で向かう
+            if (lowHp && terrain != null
+                && terrain.GetTerrain(c) == TerrainType.Heal)
             {
-                Vector2Int c = u.cell + new Vector2Int(dx, dy);
-                if (!Inside(c)) continue;
-                if (Vector2.Distance(u.cell, c) > range + 0.001f) continue;
-                if (terrain != null && !terrain.IsPassable(c)) continue;
-                Unit occ = FindUnitAt(c);
-                if (occ != null && occ.team != u.team) continue; // 敵のいるマスには進めない
-                float distE = Vector2.Distance(c, nearest.cell);
-                bool atk = !lowHp && AiCanAttackFrom(u, c, nearest);
-                float score = lowHp ? -distE : distE - (atk ? 100f : 0f);
-                if (score < bestScore)
+                if (bestReason != "回復へ後退")
                 {
-                    bestScore = score;
-                    best = c;
-                    bestAttack = atk;
+                    best = c; bestAttack = false; bestReason = "回復へ後退";
+                    bestScore = float.MinValue; // 以後の候補では上書きしない
                 }
+                continue;
+            }
+            if (bestReason == "回復へ後退") continue;
+
+            // 脅威圏外（最も近い敵まで12マス超）なら、HPが低くても通常行動に戻る
+            bool retreat = lowHp
+                && Vector2.Distance(u.cell, nearest.cell) <= 12f;
+            bool atk = !lowHp && AiCanAttackFrom(u, c, nearest);
+            float score;
+            string r;
+            if (retreat)
+            {
+                score = -distE;
+                r = "後退";
+            }
+            else if (runner)
+            {
+                float distN = float.MaxValue;
+                foreach (var nc in nexusCells)
+                    distN = Mathf.Min(distN, Vector2.Distance(c, nc));
+                score = distE - (atk ? 100f : 0f) + distN * 2f; // ネクサスに近いほど低スコア（近いマスを選ぶ）
+                r = atk ? "前進" : "ネクサスへ";
+            }
+            else
+            {
+                score = distE - (atk ? 100f : 0f);
+                r = "前進";
+            }
+            if (score < bestScore)
+            {
+                bestScore = score;
+                best = c;
+                bestAttack = atk;
+                bestReason = r;
             }
         }
         canAttack = bestAttack;
+        reason = bestReason;
         return best == u.cell ? null : best;
     }
 
@@ -2987,22 +3219,160 @@ public class GameController : MonoBehaviour
         if (nearest == null || bestDist <= 2f) return d.cell;
         Vector2Int best = d.cell;
         float bestScore = float.MaxValue;
-        for (int dx = -4; dx <= 4; dx++)
+        var reach = ReachableForDrone(d);
+        foreach (var kv in reach)
         {
-            for (int dy = -4; dy <= 4; dy++)
-            {
-                Vector2Int c = d.cell + new Vector2Int(dx, dy);
-                if (!Inside(c)) continue;
-                if (Vector2.Distance(d.cell, c) > 4.001f) continue;
-                if (terrain != null && !terrain.IsPassable(c)) continue;
-                if (FindUnitAt(c) != null) continue;
-                DroneInfo occD = FindDroneAt(c);
-                if (occD != null && occD != d) continue;
-                float score = Vector2.Distance(c, nearest.cell);
-                if (score < bestScore) { bestScore = score; best = c; }
-            }
+            Vector2Int c = kv.Key;
+            if (c == d.cell) continue;
+            if (FindUnitAt(c) != null) continue;
+            DroneInfo occD = FindDroneAt(c);
+            if (occD != null && occD != d) continue;
+            float score = Vector2.Distance(c, nearest.cell);
+            if (score < bestScore) { bestScore = score; best = c; }
         }
         return best;
+    }
+
+    // 回復対象候補：範囲内（radius < 0 で無制限）の味方（自分を含む）で、
+    // HPが minMissing 以上減っているか毒状態のうち、HP割合が最も低いもの
+    Unit AiHealTarget(Unit u, Vector2Int from, float radius, int minMissing)
+    {
+        Unit best = null;
+        float bestRatio = float.MaxValue;
+        foreach (Unit a in FindObjectsByType<Unit>())
+        {
+            if (a.team != u.team || !a.gameObject.activeSelf) continue;
+            if (radius >= 0 && Vector2.Distance(from, a.cell) > radius) continue;
+            bool needs = (a.maxHp - a.hp >= minMissing) || a.poisoned;
+            if (!needs) continue;
+            float ratio = (float)a.hp / a.maxHp;
+            if (ratio < bestRatio) { bestRatio = ratio; best = a; }
+        }
+        return best;
+    }
+
+    int CountEnemiesWithin(Unit u, Vector2Int from, float radius)
+    {
+        int n = 0;
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == u.team || !e.gameObject.activeSelf) continue;
+            if (Vector2.Distance(from, e.cell) <= radius) n++;
+        }
+        return n;
+    }
+
+    bool AnyCamouflagedEnemyWithin(Unit u, Vector2Int from, float radius)
+    {
+        foreach (Unit e in FindObjectsByType<Unit>())
+        {
+            if (e.team == u.team || !e.gameObject.activeSelf) continue;
+            if (e.camouflaged && Vector2.Distance(from, e.cell) <= radius) return true;
+        }
+        return false;
+    }
+
+    // CPUの行動（攻撃／防御／特殊／ULT）を決める。dest は移動先（移動しない場合は現在地）
+    PreparedAction ChooseAiAction(Unit u, Vector2Int dest, bool canAttack,
+                                  string reason, out string specialChoice)
+    {
+        specialChoice = null;
+        string charName = u.data != null ? u.data.characterName : "";
+        bool retreat = reason == "後退" || reason == "回復へ後退";
+        Unit nearest = NearestEnemy(u, dest);
+        float distNearest = nearest != null ? Vector2.Distance(dest, nearest.cell) : 99f;
+        bool hasEx = u.exPoints >= 1;
+
+        // 回復（主にサクラ）：ULTは射程無制限で回復30、メディカルキットは半径2で回復25
+        if (charName == "サクラ" && hasEx && AiHealTarget(u, u.cell, -1, 25) != null)
+            return PreparedAction.Ult;
+        if (u.medicalUsesLeft > 0 && AiHealTarget(u, dest, 2, 15) != null)
+        {
+            specialChoice = "メディカルキット";
+            return PreparedAction.Special;
+        }
+
+        if (retreat)
+        {
+            // 後退時：ゴウの鉄壁だけは防御的に使う
+            if (hasEx && charName == "ゴウ" && distNearest <= 7f)
+                return PreparedAction.Ult;
+            return PreparedAction.Defend;
+        }
+
+        // ミコトのULT／ハッキング：移動先の半径3以内に敵ドローンがいれば使う
+        bool droneInRange = AnyEnemyDroneWithin(u.team, dest, 3);
+        if (droneInRange && charName == "ミコト" && hasEx)
+            return PreparedAction.Ult;
+        if (droneInRange && HasItem(u, "ハッキングユニット"))
+        {
+            specialChoice = "ハッキングユニット";
+            return PreparedAction.Special;
+        }
+
+        // ノイ：ドローン未運用なら作成。運用中なら、敵がドローンに近いときULTで2回行動
+        if (HasItem(u, "ドローンユニット"))
+        {
+            DroneInfo own = FindDroneControlledBy(u);
+            if (own == null)
+            {
+                specialChoice = "ドローンユニット";
+                return PreparedAction.Special;
+            }
+            if (hasEx && charName == "ノイ" && DroneUsable(own))
+            {
+                Unit droneNearest = NearestEnemy(u, own.cell);
+                if (droneNearest != null
+                    && Vector2.Distance(own.cell, droneNearest.cell) <= 4f)
+                    return PreparedAction.Ult;
+            }
+        }
+
+        // ULT（キャラ別）
+        if (hasEx)
+        {
+            switch (charName)
+            {
+                case "ユキ": // 必中狙撃：狙える敵がいれば使う
+                    if (canAttack) return PreparedAction.Ult;
+                    break;
+                case "レン": // 破砕砲撃：敵が2体以上まとまっていれば使う
+                    if (IsGrenadeUser(u) && CountEnemiesWithin(u, dest, u.weaponRange + 2) >= 2)
+                        return PreparedAction.Ult;
+                    break;
+                case "カエデ": // 疾風斬：追加移動（4マス）の範囲に敵がいれば使う
+                    if (distNearest <= u.weaponRange + 4) return PreparedAction.Ult;
+                    break;
+                case "ゴウ": // 鉄壁：敵が迫っていれば使う
+                    if (distNearest <= 7f) return PreparedAction.Ult;
+                    break;
+                case "ハヤテ": // 広域スキャン：敵2体以上か、迷彩中の敵がいれば使う
+                    if (CountEnemiesWithin(u, dest, 6) >= 2
+                        || AnyCamouflagedEnemyWithin(u, dest, 6))
+                        return PreparedAction.Ult;
+                    break;
+            }
+        }
+
+        if (canAttack) return PreparedAction.Attack;
+
+        // 攻撃できないターンの特殊装備
+        if (HasItem(u, "センサーユニット") && !sensorUsers.Contains(u) && distNearest <= 10f)
+        {
+            specialChoice = "センサーユニット";
+            return PreparedAction.Special;
+        }
+        if (HasItem(u, "トラップユニット") && TrapUsesLeft(u) > 0 && distNearest <= 5f)
+        {
+            specialChoice = "トラップユニット";
+            return PreparedAction.Special;
+        }
+        if (HasItem(u, "光学迷彩") && !u.camouflaged)
+        {
+            specialChoice = "光学迷彩";
+            return PreparedAction.Special;
+        }
+        return PreparedAction.Defend;
     }
 
     // 解決中の一時停止を、CPUユニットの代わりに判断する（クリック処理をそのまま使う）
@@ -3012,6 +3382,8 @@ public class GameController : MonoBehaviour
         switch (pauseKind)
         {
             case PauseKind.Attack:
+            case PauseKind.KaedeAttack:
+            case PauseKind.YukiSnipe:
                 {
                     Unit target = AiPickAttackTarget(u);
                     if (target != null)
@@ -3033,8 +3405,93 @@ public class GameController : MonoBehaviour
                     HandleResolutionClick(null, AiPickGrenadeCell(u));
                     return;
                 }
+            case PauseKind.KaedeMove:
+                {
+                    // 追加移動：攻撃できるマスを優先し、最も近い敵に近づく
+                    Unit nearest = NearestEnemy(u, u.cell);
+                    Vector2Int best = u.cell;
+                    float bestScore = float.MaxValue;
+                    if (nearest != null)
+                    {
+                        foreach (var c in movable)
+                        {
+                            float score = Vector2.Distance(c, nearest.cell)
+                                - (AiCanAttackFrom(u, c, nearest) ? 100f : 0f);
+                            if (score < bestScore) { bestScore = score; best = c; }
+                        }
+                    }
+                    if (best == u.cell) HandleResolutionClick(u, u.cell); // 移動しない
+                    else HandleResolutionClick(null, best);
+                    return;
+                }
+            case PauseKind.SakuraHeal:
+                {
+                    Unit target = AiHealTarget(u, u.cell, -1, 1) ?? u;
+                    HandleResolutionClick(target, target.cell);
+                    return;
+                }
+            case PauseKind.MedicalTarget:
+                {
+                    Unit target = AiHealTarget(u, u.cell, 2, 1);
+                    if (target != null) HandleResolutionClick(target, target.cell);
+                    else HandleResolutionClick(null, new Vector2Int(-1, -1));
+                    return;
+                }
+            case PauseKind.HackTarget:
+                {
+                    DroneInfo best = null;
+                    float bestScore = float.MaxValue;
+                    foreach (var d in drones)
+                    {
+                        if (d.team == u.team) continue;
+                        float dd = Vector2.Distance(u.cell, d.cell);
+                        if (dd > 3f) continue;
+                        float score = dd + (d.disabled ? 10f : 0f); // 稼働中のドローンを優先
+                        if (score < bestScore) { bestScore = score; best = d; }
+                    }
+                    if (best != null) HandleResolutionClick(null, best.cell);
+                    else HandleResolutionClick(null, new Vector2Int(-1, -1));
+                    return;
+                }
+            case PauseKind.HackChoice:
+                {
+                    // 自分のドローンを運用中なら機能停止（権限取得の副作用で自ドローンが
+                    // 無効化されるのを避ける）、なければ権限取得
+                    pendingHackType = FindDroneControlledBy(u) != null ? 1 : 2;
+                    Debug.Log($"CPU：{u.displayName} のハッキング種別：{HackTypeLabel(pendingHackType)}");
+                    ResolveHack(u, pendingHackTarget);
+                    pendingHackTarget = null;
+                    EndAttackSelection();
+                    return;
+                }
+            case PauseKind.DroneCreateType:
+                {
+                    pendingDroneType = DroneType.Damage;
+                    Debug.Log($"CPU：{u.displayName} はダメージドローンを作成する");
+                    BeginPause(u, PauseKind.DronePlace);
+                    ShowDronePlaceRange(u);
+                    return;
+                }
+            case PauseKind.DronePlace:
+            case PauseKind.TrapPlace:
+                {
+                    // ハイライト内のマスのうち、最も近い敵に最も近いマスを選ぶ
+                    Unit nearest = NearestEnemy(u, u.cell);
+                    Vector2Int best = new Vector2Int(-1, -1);
+                    float bestDist = float.MaxValue;
+                    if (nearest != null)
+                    {
+                        foreach (var c in movable)
+                        {
+                            float dd = Vector2.Distance(c, nearest.cell);
+                            if (dd < bestDist) { bestDist = dd; best = c; }
+                        }
+                    }
+                    HandleResolutionClick(null, best);
+                    return;
+                }
             default:
-                // 簡易AIは特殊装備・ULTを使わないため、通常はここに来ない
+                // 想定外の一時停止（スモーク等）はキャンセルする
                 Debug.Log($"CPU：{u.displayName} は行動をキャンセルした");
                 EndAttackSelection();
                 return;
@@ -3171,33 +3628,26 @@ public class GameController : MonoBehaviour
     {
         ClearHighlights();
 
-        int r = unit.MoveTiles;
+        // 移動範囲：経路ベース（BFS）で実際にたどり着けるマスだけを示す
+        var reach = ReachableForUnit(unit, unit.cell, unit.MoveTiles);
         Unit[] all = FindObjectsByType<Unit>();
-        for (int dx = -r; dx <= r; dx++)
+        foreach (var kv in reach)
         {
-            for (int dy = -r; dy <= r; dy++)
+            Vector2Int c = kv.Key;
+            if (c == unit.cell) continue;
+
+            // 敵のいるマスは到達範囲に含まれない。味方のいるマスは指定できる
+            // （解決時に空いていれば入り、塞がっていれば経路の手前で止まる）
+            bool allyThere = false;
+            foreach (Unit u in all)
             {
-                if (dx == 0 && dy == 0) continue;
-                Vector2Int c = unit.cell + new Vector2Int(dx, dy);
-                if (!Inside(c)) continue;
-                if (terrain != null && !terrain.IsPassable(c)) continue;
-
-                // 敵のいるマスは指定できない。味方のいるマスは指定できる
-                // （解決時に空いていれば入り、塞がっていれば手前で止まる）
-                bool enemyThere = false;
-                bool allyThere = false;
-                foreach (Unit u in all)
-                {
-                    if (u == unit || u.cell != c) continue;
-                    if (u.team != unit.team) enemyThere = true;
-                    else allyThere = true;
-                }
-                if (enemyThere) continue;
-
-                movable.Add(c);
-                AddHighlight(c, allyThere
-                    ? new Color(1f, 0.85f, 0.3f, 0.35f) : (Color?)null);
+                if (u == unit || u.cell != c) continue;
+                allyThere = true;
+                break;
             }
+            movable.Add(c);
+            AddHighlight(c, allyThere
+                ? new Color(1f, 0.85f, 0.3f, 0.35f) : (Color?)null);
         }
 
         for (int dx = -unit.weaponRange; dx <= unit.weaponRange; dx++)
@@ -3234,30 +3684,18 @@ public class GameController : MonoBehaviour
         }
     }
 
-    // 指定した起点・半径の移動範囲だけを表示（ULTの追加移動用）
+    // 指定した起点・半径の移動範囲だけを表示（ULTの追加移動用）：経路ベース（BFS）
     void ShowMoveRangeFrom(Unit unit, Vector2Int origin, int radius)
     {
         ClearHighlights();
-        Unit[] all = FindObjectsByType<Unit>();
-        for (int dx = -radius; dx <= radius; dx++)
+        var reach = ReachableForUnit(unit, origin, radius);
+        foreach (var kv in reach)
         {
-            for (int dy = -radius; dy <= radius; dy++)
-            {
-                if (dx == 0 && dy == 0) continue;
-                Vector2Int c = origin + new Vector2Int(dx, dy);
-                if (!Inside(c)) continue;
-                if (terrain != null && !terrain.IsPassable(c)) continue;
-
-                bool occupied = false;
-                foreach (Unit u in all)
-                {
-                    if (u != unit && u.cell == c) { occupied = true; break; }
-                }
-                if (occupied) continue;
-
-                movable.Add(c);
-                AddHighlight(c, null);
-            }
+            Vector2Int c = kv.Key;
+            if (c == origin) continue;
+            if (FindUnitAt(c) != null) continue; // 追加移動は空きマスのみ
+            movable.Add(c);
+            AddHighlight(c, null);
         }
     }
 

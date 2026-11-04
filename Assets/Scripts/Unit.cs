@@ -60,6 +60,11 @@ public class Unit : MonoBehaviour
     // 目視範囲（ルールブック3.2：5 ＋ 索敵÷20、切り捨て）
     public int VisionRange => 5 + search / 20;
 
+    // 装備の反映フラグ（ApplyDataで設定）
+    public bool hasHoming;      // 追尾弾：命中+10%、外してもう1回判定
+    public bool hasMedicalKit;  // メディカルキット所持
+    public int medicalUsesLeft; // メディカルキットの残り使用回数（最大3）
+
     void Start()
     {
         ApplyData();
@@ -67,6 +72,7 @@ public class Unit : MonoBehaviour
 
     public void ApplyData()
     {
+        bool powerOption = false;
         if (data != null)
         {
             displayName = data.characterName;
@@ -84,6 +90,8 @@ public class Unit : MonoBehaviour
             shieldBonus = 0;
             shieldBlockRate = 0;
             hasCounterShield = false;
+            hasHoming = false;
+            hasMedicalKit = false;
             if (data.equipment != null)
             {
                 foreach (var item in data.equipment)
@@ -91,6 +99,10 @@ public class Unit : MonoBehaviour
                     if (item == null) continue;
                     armorBonus += item.defenseBonus;
                     mobility -= item.mobilityPenalty;
+                    if (item.itemName == "追尾弾" || item.name == "I_Homing") hasHoming = true;
+                    if (item.itemName == "火力強化" || item.itemName == "威力強化"
+                        || item.name == "I_PowerOption") powerOption = true;
+                    if (item.itemName == "メディカルキット" || item.name == "I_Medical") hasMedicalKit = true;
                     if (item.kind == ItemKind.Shield)
                     {
                         shieldBonus += item.defenseBonus;
@@ -109,6 +121,8 @@ public class Unit : MonoBehaviour
             weaponAccuracy = weapon.accuracy;
             weaponRange = weapon.range;
         }
+        if (powerOption) weaponPower += 10; // 火力強化オプション：付けた武器の威力+10
+        medicalUsesLeft = hasMedicalKit ? 3 : 0;
         hp = maxHp;
         SnapToCell();
     }

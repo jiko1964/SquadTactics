@@ -16,7 +16,7 @@ MonoBehaviour:
   maxHp: 55
   attack: 70
   defense: 30
-  precision: 85
+  precision: 80
   agility: 45
   mobility: 25
   search: 60

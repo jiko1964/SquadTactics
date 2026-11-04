@@ -16,6 +16,6 @@ MonoBehaviour:
   kind: 0
   price: 90
   defenseBonus: 20
-  blockRate: 65
+  blockRate: 55
   mobilityPenalty: 10
   description: 

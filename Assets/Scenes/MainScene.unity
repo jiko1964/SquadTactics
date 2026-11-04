@@ -2203,7 +2203,7 @@ MonoBehaviour:
   team1Characters:
   - {fileID: 11400000, guid: 458169f0717877d48865648d955d232a, type: 2}
   - {fileID: 11400000, guid: 7abeda703eb78de47957ab5992e8ad00, type: 2}
-  - {fileID: 11400000, guid: b4955c432de6f774ca218985f52dba21, type: 2}
+  - {fileID: 11400000, guid: 8cd22239fff7e634c9bb6913af771b7f, type: 2}
   team2Characters:
   - {fileID: 11400000, guid: e26f90d4ec88dc64f8f6b7a7a9022080, type: 2}
   - {fileID: 11400000, guid: 9fbdaedc3298b204982e6a802278b453, type: 2}
