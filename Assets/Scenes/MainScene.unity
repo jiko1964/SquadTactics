@@ -2172,7 +2172,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 992304814}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 12e7f5b00419ca9449ddff85c1d759e7, type: 3}
   m_Name: 
@@ -2194,7 +2194,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 992304814}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 916b9d3cc4cd709439f4f8149ca11639, type: 3}
   m_Name: 
@@ -7748,6 +7748,91 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1867596303}
   m_CullTransparentMesh: 1
+--- !u!1 &2034983166
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2034983168}
+  - component: {fileID: 2034983167}
+  m_Layer: 0
+  m_Name: SquadBuilder
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &2034983167
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2034983166}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d85388132475831429a5648fca05c5c9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SquadBuilder
+  characters:
+  - {fileID: 11400000, guid: 458169f0717877d48865648d955d232a, type: 2}
+  - {fileID: 11400000, guid: e26f90d4ec88dc64f8f6b7a7a9022080, type: 2}
+  - {fileID: 11400000, guid: f8b26e332cf04bb4db10745fcdc79f96, type: 2}
+  - {fileID: 11400000, guid: 7abeda703eb78de47957ab5992e8ad00, type: 2}
+  - {fileID: 11400000, guid: b4955c432de6f774ca218985f52dba21, type: 2}
+  - {fileID: 11400000, guid: 4b6a479438906344e9f39f71efaca9a2, type: 2}
+  - {fileID: 11400000, guid: 8cd22239fff7e634c9bb6913af771b7f, type: 2}
+  - {fileID: 11400000, guid: 9fbdaedc3298b204982e6a802278b453, type: 2}
+  weapons:
+  - {fileID: 11400000, guid: 843e036666b53cb4da71941d84de17f1, type: 2}
+  - {fileID: 11400000, guid: 1758c60363373ca4a8cfffd96c6a6c2c, type: 2}
+  - {fileID: 11400000, guid: 9daa333476b89f94eb8d393607dac9dc, type: 2}
+  - {fileID: 11400000, guid: d3c56acbe94c87744bdffef4c301b3f2, type: 2}
+  - {fileID: 11400000, guid: 3625c7d03c5cc3c4984a5f7a0373d0f0, type: 2}
+  - {fileID: 11400000, guid: e9252e3aca7cd874eb2ea94a505c16ce, type: 2}
+  - {fileID: 11400000, guid: 87f0aa0cd7e044d41a3fab8ae9095414, type: 2}
+  - {fileID: 11400000, guid: d242be38df5f93c4f835958549254af5, type: 2}
+  - {fileID: 11400000, guid: b9aa47aa09b3f9a408828b8e6bea1513, type: 2}
+  - {fileID: 11400000, guid: 819edf6cdc0f1934da95c632ea8b4dc7, type: 2}
+  equipmentCatalog:
+  - {fileID: 11400000, guid: 584e0e3ab3f9977438679bca0d745807, type: 2}
+  - {fileID: 11400000, guid: 3720bb6198dfe4f4587dde9cd9f1b349, type: 2}
+  - {fileID: 11400000, guid: e6727d33a5f9d3249ac66c899802f26b, type: 2}
+  - {fileID: 11400000, guid: 2170b7ac8db60d946ae92c275d153f27, type: 2}
+  - {fileID: 11400000, guid: c73795431e7ef624cb926f01daf02cc4, type: 2}
+  - {fileID: 11400000, guid: ca6f2773306f7b7499ced2768aeb59f7, type: 2}
+  - {fileID: 11400000, guid: 754b700300d29934fb4da93d8fe1476a, type: 2}
+  - {fileID: 11400000, guid: ed56d887c6f043349b7c28ed925020de, type: 2}
+  - {fileID: 11400000, guid: b0a75bda4fb01fd4eb25d3af9dad628e, type: 2}
+  - {fileID: 11400000, guid: 27f76cb21847a144494fde5364b28c94, type: 2}
+  - {fileID: 11400000, guid: a4dcf4f26e881294e895f5dee7d0b27c, type: 2}
+  - {fileID: 11400000, guid: 7eb1be763a6d34f4e916e401c046ad7c, type: 2}
+  - {fileID: 11400000, guid: 63972c4631f8cee4f93a53868bbd3d92, type: 2}
+  - {fileID: 11400000, guid: 0c107de32d91a7b48b27c3dc79c3eaae, type: 2}
+  - {fileID: 11400000, guid: e906747dfa97a9944922773796a66dad, type: 2}
+  unitPrefab: {fileID: 3535408880905023943, guid: 125845349403adc43972b79c232d60c7, type: 3}
+  game: {fileID: 992304817}
+  spawner: {fileID: 992304818}
+  font: {fileID: 11400000, guid: 2e40aec0efb11084e9f5bbabab265ec5, type: 2}
+  budget: 1000
+--- !u!4 &2034983168
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2034983166}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 249.0454, y: 115.28896, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2038123505
 GameObject:
   m_ObjectHideFlags: 0
@@ -8289,3 +8374,4 @@ SceneRoots:
   - {fileID: 1652471878}
   - {fileID: 125378837}
   - {fileID: 546636675}
+  - {fileID: 2034983168}
